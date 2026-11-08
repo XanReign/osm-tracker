@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OSM 5v5 Tracker</title>
+<link rel="stylesheet" href="tracker.css">
+</head>
+<body>
+<header>
+  <h1>OSM 5v5 Tracker</h1>
+  <div id="bridge" class="small">Userscript: bekleniyor…</div>
+</header>
+<nav>
+  <button data-tab="panel" class="active">Panel</button>
+  <button data-tab="settings">Ayarlar</button>
+  <button data-tab="history">Geçmiş</button>
+  <button data-tab="logs">Loglar</button>
+</nav>
+
+<main>
+<section id="tab-panel">
+  <div id="status" class="card small"></div>
+  <div id="teams" class="teams"></div>
+  <div class="btns">
+    <button id="b-fetch">Userscript'ten veri al</button>
+    <button id="b-commit">Maç gününü onayla</button>
+    <button id="b-push">Sheets'e gönder</button>
+  </div>
+  <h2>Bekleyen fark</h2><div id="preview" class="card"></div>
+  <h2>Lig tablosu</h2><div id="standings" class="card"></div>
+  <h2>Kadro değeri</h2><div id="squad" class="card"></div>
+  <h2>Gol</h2><div id="goals" class="card"></div>
+</section>
+
+<section id="tab-settings" hidden>
+  <label>OSM lig bağlantısı<input id="s-leagueUrl" type="url" placeholder="https://…"></label>
+  <label>Google OAuth Client ID<input id="s-clientId" type="text" placeholder="xxxx.apps.googleusercontent.com"></label>
+  <label>Google Sheets ID veya adresi<input id="s-sheetId" type="text"></label>
+  <label>TEAM RED menajerleri (satır başına 1)<textarea id="s-red" rows="5"></textarea></label>
+  <label>TEAM BLUE menajerleri (satır başına 1)<textarea id="s-blue" rows="5"></textarea></label>
+  <label>Sıradaki maç günü numarası<input id="s-matchday" type="number" min="1"></label>
+  <label class="row"><input id="s-autoSync" type="checkbox"> Veri gelince Sheets'e otomatik gönder (token geçerliyse)</label>
+  <label class="row"><input id="s-autoCommit" type="checkbox"> Geçerli fark gelince maç gününü otomatik onayla</label>
+  <div class="btns">
+    <button id="b-save">Kaydet</button>
+    <button id="b-autofill">Menajerleri lig tablosundan doldur</button>
+    <button id="b-google">Google'a bağlan</button>
+    <button id="b-create">Yeni Google Sheets oluştur</button>
+    <button id="b-test">Sheets bağlantı testi</button>
+    <button id="b-baseline">Başlangıç noktasını şimdiki kayıt yap</button>
+  </div>
+  <h2>Yedekleme</h2>
+  <div class="btns">
+    <button id="b-backup">JSON yedek indir</button>
+    <button id="b-restore">JSON geri yükle</button>
+    <button id="b-csv">CSV indir</button>
+  </div>
+  <input id="f-restore" type="file" accept="application/json,.json" hidden>
+</section>
+
+<section id="tab-history" hidden>
+  <h2>Maç günleri</h2><div id="history" class="card"></div>
+</section>
+
+<section id="tab-logs" hidden>
+  <h2>Sistem logları</h2><div id="logs" class="card"></div>
+  <h2>Son ham metin (tanılama)</h2><pre id="raw" class="card small"></pre>
+</section>
+</main>
+<div id="toast"></div>
+
+<script src="database.js"></script>
+<script src="settings.js"></script>
+<script src="score-engine.js"></script>
+<script src="google-sheets-api.js"></script>
+<script src="tracker.js"></script>
+</body>
+</html>
