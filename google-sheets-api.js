@@ -115,7 +115,7 @@
       ['Maç günü galibiyeti', tour.redWins, tour.blueWins],
       ['Lig puanı (kümülatif)', star(lg && lg.RED), star(lg && lg.BLUE)],
       ['Kadro değeri', sqs(sq && sq.RED), sqs(sq && sq.BLUE)],
-      ['Gol (listedeki oyunculardan)', star(gl && gl.RED), star(gl && gl.BLUE)],
+      ['Atılan gol', star(gl && gl.RED), star(gl && gl.BLUE)],
       ['Menajer', lg ? lg.RED.n : 'UNKNOWN', lg ? lg.BLUE.n : 'UNKNOWN'],
       [],
       ['Genel savaş skoru', 'RED ' + tour.redPts + ' - ' + tour.bluePts + ' BLUE  (galibiyet ' + tour.redWins + '-' + tour.blueWins + ', ' + tour.draws + ' berabere)'],
@@ -161,10 +161,12 @@
     mds.forEach(x => sv.push(['MD' + x.matchday, mil(x.squad.RED), mil(x.squad.BLUE)]));
     S['SQUAD VALUES'] = sv;
 
-    const gs = [['', 'TEAM RED', 'TEAM BLUE'], ['Gol (listedeki oyunculardan)', star(gl && gl.RED), star(gl && gl.BLUE)]];
+    const gs = [['', 'TEAM RED', 'TEAM BLUE'], ['Atılan gol', star(gl && gl.RED), star(gl && gl.BLUE)]];
     if (last && last.goalDelta) gs.push(['Son maç günü gol farkı', last.goalDelta.RED, last.goalDelta.BLUE]);
-    gs.push([], ['EN ÇOK GOL ATAN OYUNCULAR'], ['Sıra', 'Oyuncu', 'Kulüp', 'Menajer', 'Takım', 'Gol']);
-    if (curN) curN.goals.slice(0, 20).forEach(r => gs.push([r.rank, r.player, r.club, r.manager, r.team, val(r.goals)]));
+    gs.push([], ['KULÜP GOLLERİ (Gol sekmesi)'], ['Sıra', 'Kulüp', 'Menajer', 'Takım', 'Atılan', 'Yenilen', 'Sarı kart', 'Kırmızı kart']);
+    if (curN) curN.goals.forEach(r => gs.push([r.rank, r.club, r.manager, r.team, val(r.scored), val(r.conceded), val(r.yellow), val(r.red)]));
+    gs.push([], ['GOL KRALLARI (sayfadaki liste; yalnızca ilk birkaç oyuncu)'], ['Oyuncu', 'Kulüp', 'Menajer', 'Takım', 'Gol']);
+    if (curN) curN.topScorers.forEach(r => gs.push([r.player, r.club, r.manager, r.team, r.goals]));
     gs.push([], ['EN ÇOK GOL ATAN MENAJERLER'], ['Menajer', 'Takım', 'Gol']);
     gm.slice(0, 10).forEach(r => gs.push([r.manager, r.team, r.goals]));
     S['GOAL STATISTICS'] = gs;

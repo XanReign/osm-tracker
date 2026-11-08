@@ -103,7 +103,7 @@
       if (!el.getClientRects().length) continue;
       const txt = el.innerText;
       if (!txt || txt.length > 400) continue;
-      const lines = txt.split('\n').map(s => s.trim()).filter(Boolean);
+      const lines = txt.split(/[\n\t]+/).map(s => s.trim()).filter(Boolean);
       if (lines.length < 3 || lines.length > 10) continue;
       if (!/^\d{1,3}$/.test(lines[0])) continue;
       if (!NUM.test(lines[lines.length - 1])) continue;
@@ -122,6 +122,27 @@
       if (!seen.has(k)) { seen.add(k); rows.push(row); }
     });
     return rows;
+  }
+
+  // Tablo başlık satırı: "#<TAB><TAB>Kulüp<TAB>Pua" biçiminde görünüyor (gerçek sayfa çıktısından).
+  function extractHeader() {
+    const lines = (document.body.innerText || '').split('\n');
+    for (const l of lines) {
+      if (l.indexOf('#\t') === 0) return l.split('\t').map(s => s.trim()).filter(s => s && s !== '#');
+    }
+    return [];
+  }
+
+  // Sayfa yanındaki "Gol kralları" listesi: oyuncu / kulüp / gol (3'lü satır grupları)
+  function extractScorers() {
+    const lines = (document.body.innerText || '').split('\n').map(s => s.trim()).filter(Boolean);
+    const i0 = lines.findIndex(l => norm(l) === 'GOL KRALLARI');
+    const out = [];
+    if (i0 < 0) return out;
+    for (let i = i0 + 1; i + 2 < lines.length && /^\d{1,3}$/.test(lines[i + 2]); i += 3) {
+      out.push({ player: lines[i], club: lines[i + 1], goals: parseInt(lines[i + 2], 10) });
+    }
+    return out;
   }
 
   let running = false;
@@ -145,7 +166,7 @@
         pushError('TAB_NOT_FOUND', 'LIG TABLOSU sekmesi bulunamadı: ' + location.href);
         return;
       }
-      const snap = { ts: Date.now(), url: location.href, tabs: {} };
+      const snap = { v: 2, ts: Date.now(), url: location.href, tabs: {}, scorers: [] };
       let prevSig = '';
       for (const [key, label] of TABS) {
         try {
@@ -158,11 +179,12 @@
           const sig = JSON.stringify(rows);
           if (!rows.length) snap.tabs[key] = { ok: false, error: 'NO_ROWS (satır sezgisi eşleşmedi)', rows: [], raw };
           else if (key !== 'league' && sig === prevSig) snap.tabs[key] = { ok: false, error: 'CONTENT_UNCHANGED (sekme değişmedi)', rows: [], raw };
-          else { snap.tabs[key] = { ok: true, rows, raw }; prevSig = sig; }
+          else { snap.tabs[key] = { ok: true, rows, raw, header: extractHeader() }; prevSig = sig; }
         } catch (e) {
           snap.tabs[key] = { ok: false, error: 'EXCEPTION ' + e.message, rows: [] };
         }
       }
+      try { snap.scorers = extractScorers(); } catch (e) { snap.scorers = []; }
       const okKeys = Object.keys(snap.tabs).filter(k => snap.tabs[k].ok);
       const summary = {};
       Object.keys(snap.tabs).forEach(k => summary[k] = { ok: snap.tabs[k].ok, rows: snap.tabs[k].rows.length, error: snap.tabs[k].error || null });
@@ -174,6 +196,7 @@
       }
       const contentOnly = {};
       okKeys.forEach(k => contentOnly[k] = snap.tabs[k].rows);
+      contentOnly.scorers = snap.scorers;
       snap.id = hash(JSON.stringify(contentOnly));
       const q = getQ();
       if (q.some(s => s.id === snap.id)) { setStatus('Aynı veri zaten kuyrukta'); return; }

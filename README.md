@@ -33,8 +33,8 @@ Kuyruktaki kayıt, tracker işleyip onaylamadan silinmez (veri kaybını önler)
 | JS söz dizimi (`node --check`) | Geçti |
 | Skor motoru (fark, negatif tespit, takım toplamı) | Örnek verilerle test edildi |
 | Lig tablosu **görünüşü** (ekran görüntüsü: `#`, Kulüp+menajer, Pua) | Görsel olarak doğrulandı |
-| OSM **DOM yapısı**, sekme tıklama, satır sezgisi | **Test edilmedi** (gerçek DOM'a erişim yok) |
-| Menajer Listesi / Kadro Değeri / Gol sekmeleri | **Test edilmedi**; görünümleri bilinmiyor |
+| Sayfa metin yapısı (4 sekme, başlık satırı, Gol kralları listesi) | Gerçek sayfa çıktısıyla ayrıştırma test edildi (1. sürüm: sekmeler yapışıyordu, düzeltildi) |
+| Sekme tıklama + satır sezgisi | Gerçek telefonda 3/4 sekme okundu; düzeltme sonrası yeniden denenmeli |
 | Kadro değeri sayı biçimi (`850M`, `1.250.000` …) | Varsayım, doğrulanmadı |
 | Google OAuth + Sheets yazma | **Test edilmedi** (gerçek hesap/Client ID gerekir) |
 | Android arka plan davranışı | Test edilmedi |
@@ -45,8 +45,8 @@ Seçici kullanılmadı: sekmeler görünen metne (LIG TABLOSU, MENAJER LİSTESİ
 OSM panelinde **"Tanılama çıktısını kopyala"** → bana yapıştır; tracker'daki Loglar sekmesinde "Son ham metin" bölümü de sekmelerin gerçekte ne okuduğunu gösterir. Sekme başına `NO_ROWS` görürsen satır sezgisini o sekmenin gerçek metnine göre ayarlarız.
 
 ## Bilinen sınırlar
-- Mobil lig tablosunda yalnızca puan görünüyor (G/B/M, atılan/yenilen, averaj, oynanan **yok**); bunlar okunamaz ve UNKNOWN kalır. Birden fazla sayısal sütun varsa puan sütunu belirlenemez → UNKNOWN (tahmin edilmez).
-- Gol toplamı, gol sekmesinde listelenen oyunculardan hesaplanır; liste kısaltılmışsa takım toplamı eksik olabilir.
+- Lig tablosunda yalnızca puan görünüyor (G/B/M, averaj, oynanan **yok**); UNKNOWN kalır. Sütunlar başlık adına göre (Pua, Değer, Atılan gol…) eşleşir; başlık okunamazsa uyarı verilir.
+- GOL sekmesi **kulüp bazlıdır** (atılan/yenilen gol, kartlar). Oyuncu golleri yalnızca sayfadaki "Gol kralları" listesinden (ilk 4 oyuncu) alınır; tam oyuncu sıralaması OSM'de görünmüyor.
 - Google token ~1 saat geçerlidir ve yeniden bağlanma kullanıcı dokunuşu ister; token geçersizse otomatik gönderim atlanır, veri yerelde korunur.
 - Android sekmeyi arka planda durdurabilir; toplama sayfa açıkken yapılır.
 - OSM'den yazılı izin alınmadığı varsayımıyla yalnızca oturumunuzda görünen veriyi okur; oturum bilgisi/çerez toplanmaz, ağ isteği yalnızca Google'a gider.

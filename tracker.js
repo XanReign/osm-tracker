@@ -40,6 +40,7 @@
     queue.sort((a, b) => a.ts - b.ts);
     for (const it of queue) {
       ids.push(it.id);
+      if (it.kind !== 'error' && (!it.v || it.v < 2)) { await OSMDB.log('WARN', 'OLD_FORMAT', 'Eski biçimli kayıt atlandı (yeniden toplayın): ' + it.id); continue; }
       if (it.kind === 'error') { await OSMDB.log('ERROR', it.error.code, it.error.msg); continue; }
       if (await OSMDB.get('snapshots', it.id)) { await OSMDB.log('INFO', 'DUPLICATE', 'Aynı kayıt ikinci kez geldi: ' + it.id); continue; }
       const raw = {};
@@ -135,7 +136,7 @@
     $('status').innerHTML = CUR
       ? 'Son kayıt: ' + esc(fmt(CUR.ts)) + ' · Başlangıç noktası: ' + esc(BASE ? fmt(BASE.ts) : 'YOK') + ' · Kayıtlı maç günü: ' + MDS.length +
         (curN && curN.warnings.length ? '<br><span class="warn">Uyarı: ' + esc(curN.warnings.slice(0, 3).join(' | ')) + '</span>' : '') +
-        '<br>* = bazı değerler UNKNOWN, toplam eksik olabilir. Gol toplamı yalnızca listede görünen oyunculardan hesaplanır.'
+        '<br>* = bazı değerler UNKNOWN, toplam eksik olabilir.'
       : 'Henüz kayıt yok. OSM lig sayfasında userscript\'i çalıştırın, sonra "Userscript\'ten veri al"a basın.';
 
     const lg = curN && OSMScore.agg(curN.league, 'points'), sq = curN && OSMScore.agg(curN.squad, 'value'), gl = curN && OSMScore.agg(curN.goals, 'goals');
@@ -162,10 +163,9 @@
 
     $('standings').innerHTML = curN && curN.league.length ? table(['#', 'Kulüp', 'Menajer', 'Takım', 'Puan'], curN.league.map(r => [r.rank, r.club, r.manager, r.team, val(r.points)]), 3) : 'Veri yok (UNKNOWN)';
     $('squad').innerHTML = curN && curN.squad.length ? table(['#', 'Menajer', 'Takım', 'Değer', 'Ham'], curN.squad.map(r => [r.rank, r.manager, r.team, mil(r.value), val(r.valueRaw)]), 2) : 'Kadro değeri okunamadı (UNKNOWN)';
-    const gm = curN ? OSMScore.goalsByManager(curN.goals) : [];
     $('goals').innerHTML = curN && curN.goals.length
-      ? table(['#', 'Oyuncu', 'Menajer', 'Takım', 'Gol'], curN.goals.slice(0, 15).map(r => [r.rank, r.player, r.manager, r.team, val(r.goals)]), 3) +
-        '<p class="small">Menajer bazlı: ' + esc(gm.slice(0, 5).map(x => x.manager + ' ' + x.goals).join(' · ')) + '</p>'
+      ? table(['#', 'Kulüp', 'Menajer', 'Takım', 'Atılan', 'Yenilen'], curN.goals.map(r => [r.rank, r.club, r.manager, r.team, val(r.scored), val(r.conceded)]), 3) +
+        (curN.topScorers.length ? '<p class="small">Gol kralları: ' + esc(curN.topScorers.map(x => x.player + ' (' + x.team + ') ' + x.goals).join(' · ')) + '</p>' : '')
       : 'Gol bilgisi okunamadı (UNKNOWN)';
 
     $('history').innerHTML = MDS.length
