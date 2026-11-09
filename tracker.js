@@ -1,4 +1,4 @@
-/* tracker.js — köprü, kayıt işleme, arayüz, dışa aktarma */
+/* tracker.js — köprü, kayıt işleme, arayüz, dışa aktarma + günlük skor sıfırlama */
 (function () {
   'use strict';
   const $ = id => document.getElementById(id);
@@ -8,7 +8,7 @@
   const mil = v => (v == null ? 'UNKNOWN' : Math.round(v / 1e5) / 10 + 'M');
 
   let ST, SNAPS = [], MDS = [], CUR = null, BASE = null, curN = null, baseN = null, diff = null, tour = null;
-  let busy = false, bridgeSeen = false;
+  let busy = false, bridgeSeen = false, dailyCleared = false;
 
   function toast(m) {
     const t = $('toast');
@@ -27,6 +27,7 @@
     const byId = id => SNAPS.find(s => s.id === id) || null;
     CUR = byId(await kv('latest')) || SNAPS[SNAPS.length - 1] || null;
     BASE = byId(await kv('baseline'));
+    dailyCleared = (await kv('dailyCleared')) === true;
     curN = CUR ? OSMScore.normalize(CUR, ST) : null;
     baseN = BASE ? OSMScore.normalize(BASE, ST) : null;
     diff = curN && baseN && CUR.id !== BASE.id ? OSMScore.computeDiff(baseN, curN) : null;
@@ -77,6 +78,7 @@
     };
     await OSMDB.put('matchdays', rec);
     await OSMDB.put('kv', { key: 'baseline', value: CUR.id });
+    await OSMDB.put('kv', { key: 'dailyCleared', value: false });
     ST.matchday = n + 1;
     await OSMSettings.save(ST);
     await OSMDB.log('INFO', 'MATCHDAY_COMMIT', 'MD' + n + ': RED ' + rec.red + ' - ' + rec.blue + ' BLUE');
@@ -141,10 +143,14 @@
 
     const lg = curN && OSMScore.agg(curN.league, 'points'), sq = curN && OSMScore.agg(curN.squad, 'value'), gl = curN && OSMScore.agg(curN.goals, 'goals');
     $('teams').innerHTML = ['RED', 'BLUE'].map(t => {
-      const pend = diff && diff.valid ? diff[t.toLowerCase()] : null;
+      const pending = diff && diff.valid ? diff[t.toLowerCase()] : null;
+      const dailyValue = pending != null ? pending : (dailyCleared ? '—' : (last ? last[t.toLowerCase()] : '—'));
+      const dailyLabel = pending != null
+        ? 'bekleyen maç günü puanı'
+        : (dailyCleared ? (diff && !diff.valid ? 'günlük fark doğrulanamadı' : 'yeni maç günü bekleniyor') : 'son maç günü puanı');
       return '<div class="team ' + t + '"><div class="t">TEAM ' + t + '</div>' +
-        '<div class="big">' + esc(pend == null ? (last ? last[t.toLowerCase()] : '—') : pend) + '</div>' +
-        '<div class="m">' + (pend == null ? 'son maç günü' : 'bekleyen maç günü') + ' puanı</div>' +
+        '<div class="big">' + esc(dailyValue) + '</div>' +
+        '<div class="m">' + esc(dailyLabel) + '</div>' +
         '<div class="m">Savaş toplamı: ' + (t === 'RED' ? tour.redPts : tour.bluePts) + ' · MD galibiyeti: ' + (t === 'RED' ? tour.redWins : tour.blueWins) + '</div>' +
         '<div class="m">Lig puanı: ' + esc(star(lg && lg[t])) + '</div>' +
         '<div class="m">Kadro: ' + esc(sq ? mil(sq[t].sum) + (sq[t].unknown ? '*' : '') : 'UNKNOWN') + '</div>' +
@@ -153,6 +159,7 @@
     }).join('');
 
     if (!BASE) $('preview').textContent = 'Başlangıç noktası yok; skor üretilmedi.';
+    else if (!diff && dailyCleared) $('preview').textContent = 'Günlük skor temizlendi. Yeni maç gününün puan farkı bekleniyor. Genel RED vs BLUE savaş skoru ve önceki maç günleri korundu.';
     else if (!diff) $('preview').textContent = 'Başlangıç noktasından sonra yeni kayıt yok.';
     else {
       let h = diff.valid ? (diff.unchanged ? '<p>Puan değişmedi.</p>' : '<p class="ok"><b>RED ' + diff.red + ' - ' + diff.blue + ' BLUE</b> (geçerli)</p>') : '<p class="bad">Geçersiz: ' + esc(diff.reasons.join('; ')) + '</p>';
@@ -250,9 +257,49 @@
       if (!CUR) throw new Error('Kayıt yok');
       if (!confirm('Başlangıç noktası şimdiki kayıt olarak değiştirilsin? Bekleyen fark sıfırlanır.')) return;
       await OSMDB.put('kv', { key: 'baseline', value: CUR.id });
+      await OSMDB.put('kv', { key: 'dailyCleared', value: true });
       await OSMDB.log('INFO', 'BASELINE_RESET', CUR.id);
       await refresh();
     });
+
+    // Yeni lig için yalnızca günlük farkı temizle. Geçmiş maç günleri ve genel savaş skoru korunur.
+    act('b-new-war', async () => {
+      if (!CUR || !curN || !curN.league || !curN.league.length) {
+        throw new Error("Önce yeni ligden veri toplayıp Tracker'a aktarın.");
+      }
+      const redManagers = [];
+      const blueManagers = [];
+      curN.league.forEach(row => {
+        const match = /\bteam\s*(red|blue)\b/i.exec(String(row.club || ''));
+        if (!match || !row.manager || row.manager === 'UNKNOWN') return;
+        (match[1].toUpperCase() === 'RED' ? redManagers : blueManagers).push(row.manager);
+      });
+      if (redManagers.length !== 5 || blueManagers.length !== 5) {
+        throw new Error('Kulüp adlarından tam 5 RED ve 5 BLUE menajer tanınamadı. Günlük skor temizlenmedi; menajer listelerini kontrol edin.');
+      }
+      const confirmed = confirm(
+        'YENİ SAVAŞ BAŞLAT / GÜNLÜK SKORU TEMİZLE\n\n' +
+        'Günlük bekleyen puan farkı sıfırlanacak ve mevcut lig kaydı yeni başlangıç noktası olacak.\n\n' +
+        'KORUNACAK: Genel RED vs BLUE savaş toplamı, onaylanmış maç günleri, lig/kadro/gol/kart verileri ve Google Sheets kayıtları.\n\n' +
+        'Devam edilsin mi?'
+      );
+      if (!confirmed) return;
+
+      ST.redManagers = redManagers;
+      ST.blueManagers = blueManagers;
+      if (CUR.url) ST.leagueUrl = CUR.url;
+      const lastMatchday = MDS.reduce((max, item) => Math.max(max, Number(item.matchday) || 0), 0);
+      ST.matchday = Math.max(Number(ST.matchday) || 1, lastMatchday + 1, 1);
+      await OSMSettings.save(ST);
+      await OSMDB.put('kv', { key: 'baseline', value: CUR.id });
+      await OSMDB.put('kv', { key: 'dailyCleared', value: true });
+      await OSMDB.log('INFO', 'NEW_WAR_DAILY_RESET',
+        'Günlük skor temizlendi; genel savaş skoru ve maç günü geçmişi korundu. RED=' + redManagers.length + ', BLUE=' + blueManagers.length);
+      OSMSettings.toForm(ST);
+      await refresh();
+      toast('Günlük skor temizlendi. Genel savaş skoru ve diğer istatistikler korundu.');
+    });
+
     act('b-backup', async () => { download('osm5v5-yedek-' + Date.now() + '.json', JSON.stringify(await OSMDB.exportAll()), 'application/json'); });
     act('b-restore', async () => { $('f-restore').click(); });
     $('f-restore').addEventListener('change', async e => {

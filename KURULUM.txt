@@ -1,0 +1,39 @@
+OSM 5v5 TRACKER — YENİ SAVAŞ / GÜNLÜK SKORU TEMİZLE
+
+GITHUB'DA GÜNCELLENECEK DOSYALAR
+Aynı klasörde, mevcut dosyaların üzerine yalnızca şu 3 dosyayı yükle:
+1) tracker.js
+2) tracker.html
+3) tracker.css
+
+DİĞER DOSYALARA DOKUNMA:
+database.js, settings.js, score-engine.js, google-sheets-api.js ve Violentmonkey Userscript aynı kalacak.
+
+BUTONUN YAPTIĞI
+- Günlük bekleyen puan farkını temizler.
+- O anki son lig kaydını yeni baseline (başlangıç noktası) yapar.
+- Güncel ligdeki kulüp isimlerinden Team Red ve Team Blue menajerlerini yeniden tanır (5 + 5).
+- Maç günü numarasını geçmişte kullanılan en son numaradan devam ettirir.
+
+KORUNANLAR
+- Genel RED vs BLUE savaş toplamı ve maç günü galibiyetleri.
+- Onaylanmış bütün maç günü sonuçları ve geçmiş menajer farkları.
+- Son lig kaydı, lig puanları, kadro değerleri, goller, yenilen goller ve kartlar.
+- Google Sheets ID, OAuth Client ID, otomatik senkronizasyon ayarları ve Google Sheets'teki eski kayıtlar.
+- Snapshot ve sistem log geçmişi.
+
+GÜVENLİK
+- Butona basınca onay penceresi çıkar.
+- Kulüp adlarından tam 5 RED ve 5 BLUE menajer çıkarılamazsa temizleme yapılmaz.
+- Veritabanından snapshot, matchday veya log silinmez; OSM Userscript kuyruğuna dokunulmaz.
+
+KURULUM
+1) GitHub deposundaki mevcut tracker.html, tracker.js ve tracker.css dosyalarını aynı adlı dosyalarla değiştir.
+2) Değişiklikleri Commit et.
+3) GitHub Pages yayımlandıktan sonra Tracker sayfasını Firefox'ta tamamen yenile/aç.
+4) Yeni lig verilerini OSM'den topla ve Tracker'a aktar.
+5) Takım ve istatistiklerin doğru olduğunu kontrol et.
+6) Kırmızı "YENİ SAVAŞ BAŞLAT · GÜNLÜK SKORU TEMİZLE" butonuna dokun ve onayla.
+
+SONUÇ
+Günlük puan kutusu "— / yeni maç günü bekleniyor" olur. Genel savaş skoru ve diğer istatistikler aynı kalır. Sonraki lig verisi geldiğinde günlük fark yeni başlangıç kaydına göre hesaplanır.

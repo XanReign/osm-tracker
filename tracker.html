@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>OSM 5v5 Tracker</title>
-<link rel="stylesheet" href="tracker.css">
+<link rel="stylesheet" href="tracker.css?v=5">
 </head>
 <body>
 <header>
@@ -26,6 +26,7 @@
     <button id="b-fetch">Userscript'ten veri al</button>
     <button id="b-commit">Maç gününü onayla</button>
     <button id="b-push">Sheets'e gönder</button>
+    <button id="b-new-war" class="danger">YENİ SAVAŞ BAŞLAT · GÜNLÜK SKORU TEMİZLE</button>
   </div>
   <h2>Bekleyen fark</h2><div id="preview" class="card"></div>
   <h2>Lig tablosu</h2><div id="standings" class="card"></div>
@@ -70,10 +71,10 @@
 </main>
 <div id="toast"></div>
 
-<script src="database.js"></script>
-<script src="settings.js"></script>
-<script src="score-engine.js"></script>
-<script src="google-sheets-api.js"></script>
-<script src="tracker.js"></script>
+<script src="database.js?v=5"></script>
+<script src="settings.js?v=5"></script>
+<script src="score-engine.js?v=5"></script>
+<script src="google-sheets-api.js?v=5"></script>
+<script src="tracker.js?v=5"></script>
 </body>
 </html>
