@@ -9,7 +9,10 @@
     blueManagers: [],
     matchday: 1,
     autoSync: true,
-    autoCommit: false
+    autoCommit: false,
+    redName: '',
+    blueName: '',
+    battleCompleted: false
   };
 
   async function load() {
@@ -30,6 +33,9 @@
     $('s-matchday').value = st.matchday;
     $('s-autoSync').checked = !!st.autoSync;
     $('s-autoCommit').checked = !!st.autoCommit;
+    $('s-redName').value = st.redName || '';
+    $('s-blueName').value = st.blueName || '';
+    $('s-completed').checked = !!st.battleCompleted;
   }
 
   function fromForm(st) {
@@ -43,7 +49,10 @@
       blueManagers: lines($('s-blue').value),
       matchday: isNaN(n) || n < 1 ? 1 : n,
       autoSync: $('s-autoSync').checked,
-      autoCommit: $('s-autoCommit').checked
+      autoCommit: $('s-autoCommit').checked,
+      redName: $('s-redName').value.trim(),
+      blueName: $('s-blueName').value.trim(),
+      battleCompleted: $('s-completed').checked
     });
   }
 

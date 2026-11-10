@@ -65,6 +65,7 @@
     const T = snap.tabs || {};
     ['league', 'managers', 'squad', 'goals'].forEach(k => { out.tabOk[k] = !!(T[k] && T[k].ok); });
     const H = k => (T[k] && T[k].header) || null;
+    out.leagueInfo = snap.leagueInfo || null;
 
     if (out.tabOk.league) {
       out.league = T.league.rows.map(r => {
@@ -178,5 +179,16 @@
     return t;
   }
 
-  g.OSMScore = { parseNum, teamOf, identify, normalize, computeDiff, agg, goalsByManager, tournament, K };
+  // Takım görünen adı: kulüp adlarından ("Team Red 1" -> "Team Red"); tutarsızsa ayar; yoksa varsayılan.
+  function teamNames(n, st) {
+    const out = { RED: (st && st.redName) || '', BLUE: (st && st.blueName) || '' };
+    ['RED', 'BLUE'].forEach(t => {
+      if (out[t]) return;
+      const pre = new Set((n ? n.league : []).filter(r => r.team === t).map(r => clean(r.club).replace(/\s*\d+$/, '')));
+      out[t] = pre.size === 1 && Array.from(pre)[0] ? Array.from(pre)[0] : 'Team ' + (t === 'RED' ? 'Red' : 'Blue');
+    });
+    return out;
+  }
+
+  g.OSMScore = { parseNum, teamOf, identify, normalize, computeDiff, agg, goalsByManager, tournament, teamNames, K };
 })(typeof window !== 'undefined' ? window : globalThis);
