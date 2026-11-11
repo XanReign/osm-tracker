@@ -25,8 +25,6 @@ main { padding: 0 10px 40px; }
 .team div.m { font-size: 13px; margin-top: 4px; opacity: .95; }
 .btns { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
 .btns button { flex: 1 1 45%; padding: 10px; border: 0; border-radius: 8px; background: var(--btn); color: var(--btnfg); font-size: 14px; }
-.btns button.danger { flex: 1 1 100%; margin-top: 4px; padding: 12px 10px; border: 1px solid rgba(255,255,255,.16); border-radius: 9px; background: linear-gradient(135deg, #991b1b, #dc2626); color: #fff; font-weight: 800; letter-spacing: .2px; box-shadow: 0 3px 12px rgba(220,38,38,.2); }
-.btns button.danger:active { transform: translateY(1px); filter: brightness(.94); }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th, td { text-align: left; padding: 5px 6px; border-bottom: 1px solid var(--line); white-space: nowrap; }
 td.RED, .tagRED { color: var(--red); font-weight: 700; }
@@ -42,3 +40,11 @@ pre { white-space: pre-wrap; word-break: break-all; max-height: 280px; overflow:
 #toast { position: fixed; left: 10px; right: 10px; bottom: 14px; padding: 10px 12px; border-radius: 8px;
   background: #111; color: #fff; opacity: 0; pointer-events: none; transition: opacity .2s; text-align: center; }
 #toast.show { opacity: .95; }
+
+.score { font-size: 30px; font-weight: 800; text-align: center; margin: 10px 0 0; }
+.score .small { font-weight: 400; }
+#leagueName { margin: 2px 0 0; }
+
+.war { border: 1px solid var(--line); border-radius: 10px; padding: 10px; margin: 8px 0; }
+.war.sel { border-color: var(--blue); }
+#warmeta select, #warmeta input { padding: 4px; max-width: 90px; }

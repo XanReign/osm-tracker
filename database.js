@@ -1,8 +1,8 @@
 /* database.js — IndexedDB katmanı (tracker sayfası kökeni) */
 (function (g) {
   'use strict';
-  const DB_NAME = 'osm5v5', VER = 1;
-  const STORES = ['snapshots', 'matchdays', 'kv', 'logs'];
+  const DB_NAME = 'osm5v5', VER = 2;
+  const STORES = ['snapshots', 'matchdays', 'md', 'kv', 'logs'];
   let _db = null;
 
   function open() {
@@ -10,11 +10,13 @@
     return new Promise((res, rej) => {
       const r = indexedDB.open(DB_NAME, VER);
       r.onupgradeneeded = () => {
-        const d = r.result;
-        d.createObjectStore('snapshots', { keyPath: 'id' });
-        d.createObjectStore('matchdays', { keyPath: 'matchday' });
-        d.createObjectStore('kv', { keyPath: 'key' });
-        d.createObjectStore('logs', { keyPath: 'id', autoIncrement: true });
+        // Sürüm 2: 'md' deposu (anahtar: savaşId:maçGünü). Mevcut veriler silinmez.
+        const d = r.result, has = n => d.objectStoreNames.contains(n);
+        if (!has('snapshots')) d.createObjectStore('snapshots', { keyPath: 'id' });
+        if (!has('matchdays')) d.createObjectStore('matchdays', { keyPath: 'matchday' });
+        if (!has('kv')) d.createObjectStore('kv', { keyPath: 'key' });
+        if (!has('logs')) d.createObjectStore('logs', { keyPath: 'id', autoIncrement: true });
+        if (!has('md')) d.createObjectStore('md', { keyPath: 'k' });
       };
       r.onsuccess = () => { _db = r.result; res(_db); };
       r.onerror = () => rej(r.error);

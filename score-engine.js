@@ -79,10 +79,20 @@
       });
     }
     const lg = out.league;
+    (function inferSides() {
+      const unk = lg.filter(r => r.team === 'UNKNOWN');
+      if (!unk.length || unk.length !== lg.length) return;                      // yalnızca hiçbir takım belirlenemediyse
+      const pre = r => clean(r.club).replace(/\s*\d+$/, '');
+      const groups = new Map(); lg.forEach(r => { const k = pre(r); if (k) groups.set(k, (groups.get(k) || 0) + 1); });
+      const names = Array.from(groups.keys()).sort((a, b) => a.localeCompare(b));
+      if (names.length === 2 && groups.get(names[0]) === groups.get(names[1])) lg.forEach(r => { r.team = pre(r) === names[0] ? 'RED' : 'BLUE'; });
+    })();
+    const sideByMgr = new Map(lg.map(r => [K(r.manager), r.team]));
+    const tm = (m, c) => (sideByMgr.get(K(m)) && sideByMgr.get(K(m)) !== 'UNKNOWN' ? sideByMgr.get(K(m)) : teamOf(m, c, st));
     if (out.tabOk.managers) {
       out.managers = T.managers.rows.map(r => {
         const id = identify(r.texts, lg);
-        return { rank: r.rank, manager: id.manager, club: id.club, extra: r.numsRaw, team: teamOf(id.manager, id.club, st) };
+        return { rank: r.rank, manager: id.manager, club: id.club, extra: r.numsRaw, team: tm(id.manager, id.club) };
       });
     }
     if (out.tabOk.squad) {
@@ -91,7 +101,7 @@
         const raw = pick(r, H('squad'), /^deger/, 0, out, 'Kadro');
         const players = num(pick(r, H('squad'), /^oyuncular/, 1, out, 'Kadro'));
         if (id.manager === 'UNKNOWN') out.warnings.push('Kadro satırı ' + r.rank + ': menajer eşleşmedi');
-        return { rank: r.rank, manager: id.manager, club: id.club, value: num(raw), valueRaw: raw, players, team: teamOf(id.manager, id.club, st) };
+        return { rank: r.rank, manager: id.manager, club: id.club, value: num(raw), valueRaw: raw, players, team: tm(id.manager, id.club) };
       });
     }
     if (out.tabOk.goals) {
@@ -100,7 +110,7 @@
         const id = identify(r.texts, lg);
         const scored = num(pick(r, H('goals'), /at.lan gol/, 0, out, 'Gol'));
         return {
-          rank: r.rank, club: id.club, manager: id.manager, team: teamOf(id.manager, id.club, st),
+          rank: r.rank, club: id.club, manager: id.manager, team: tm(id.manager, id.club),
           scored, conceded: num(pick(r, H('goals'), /yenilen gol/, 1, out, 'Gol')),
           yellow: num(pick(r, H('goals'), /sar. kart/, 2, out, 'Gol')),
           red: num(pick(r, H('goals'), /k.rm.z. kart/, 3, out, 'Gol')),
@@ -111,7 +121,7 @@
     // Sayfadaki "Gol kralları" listesi (yalnızca ilk birkaç oyuncu)
     out.topScorers = (snap.scorers || []).map(x => {
       const id = identify([x.club], lg);
-      return { player: x.player, club: x.club, manager: id.manager, team: teamOf(id.manager, x.club, st), goals: x.goals };
+      return { player: x.player, club: x.club, manager: id.manager, team: tm(id.manager, x.club), goals: x.goals };
     });
     return out;
   }

@@ -10,6 +10,8 @@
     matchday: 1,
     autoSync: true,
     autoCommit: false,
+    minMatches: 3,
+    countLive: false,
     redName: '',
     blueName: '',
     battleCompleted: false
@@ -33,6 +35,8 @@
     $('s-matchday').value = st.matchday;
     $('s-autoSync').checked = !!st.autoSync;
     $('s-autoCommit').checked = !!st.autoCommit;
+    $('s-minMatches').value = st.minMatches == null ? 3 : st.minMatches;
+    $('s-countLive').checked = !!st.countLive;
     $('s-redName').value = st.redName || '';
     $('s-blueName').value = st.blueName || '';
     $('s-completed').checked = !!st.battleCompleted;
@@ -50,6 +54,8 @@
       matchday: isNaN(n) || n < 1 ? 1 : n,
       autoSync: $('s-autoSync').checked,
       autoCommit: $('s-autoCommit').checked,
+      minMatches: Math.max(0, parseInt($('s-minMatches').value, 10) || 0),
+      countLive: $('s-countLive').checked,
       redName: $('s-redName').value.trim(),
       blueName: $('s-blueName').value.trim(),
       battleCompleted: $('s-completed').checked

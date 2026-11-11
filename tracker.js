@@ -7,7 +7,7 @@
   const val = v => (v == null ? 'UNKNOWN' : v);
   const mil = v => (v == null ? 'UNKNOWN' : Math.round(v / 1e5) / 10 + 'M');
 
-  let ST, SNAPS = [], MDS = [], CUR = null, BASE = null, curN = null, baseN = null, diff = null, tour = null;
+  let ST, WARS = [], WAR = null, ALLMD = [], SNAPS = [], MDS = [], CUR = null, BASE = null, curN = null, baseN = null, diff = null, tour = null;
   let busy = false, bridgeSeen = false, appReady = false, requestSeq = 0;
   const pendingRequests = new Map();
 
@@ -28,22 +28,49 @@
   // ---------- Veri yükleme ----------
   async function kv(key) { const record = await OSMDB.get('kv', key); return record ? record.value : null; }
 
+  // ---------- Savaş kaydı / kapsam ----------
+  async function loadST() {
+    const g = await OSMSettings.load();
+    ST = Object.assign({}, g, WAR ? Object.assign({}, WAR.cfg, { battleCompleted: WAR.status === 'COMPLETED' }) : {});
+  }
+  async function saveST() {
+    const sp = OSMWars.splitSettings(ST);
+    await OSMSettings.save(sp.global);
+    if (WAR) {
+      WAR.cfg = Object.assign(WAR.cfg || {}, sp.cfg);
+      if (WAR.status !== 'ARCHIVED') WAR.status = ST.battleCompleted ? 'COMPLETED' : 'LIVE';
+      await OSMWars.saveWars(WARS);
+    }
+  }
+  async function loadWars() {
+    WARS = await OSMWars.listWars();
+    const id = await OSMWars.getCurrentId();
+    WAR = WARS.find(w => w.id === id && !w.deleted) || WARS.find(w => !w.deleted) || null;
+  }
+  async function selectWar(id) {
+    WAR = WARS.find(w => w.id === id) || null;
+    if (WAR) await OSMWars.setCurrentId(WAR.id);
+    await loadST();
+    OSMSettings.toForm(ST);
+    await refresh();
+  }
+
   async function load() {
-    SNAPS = (await OSMDB.all('snapshots')).sort((a, b) => a.ts - b.ts);
-    MDS = (await OSMDB.all('matchdays')).sort((a, b) => a.matchday - b.matchday);
+    const wid = WAR ? WAR.id : null;
+    SNAPS = (await OSMDB.all('snapshots')).filter(s => s.warId === wid).sort((a, b) => a.ts - b.ts);
+    ALLMD = await OSMDB.all('md');
+    MDS = ALLMD.filter(m => m.warId === wid).sort((a, b) => a.matchday - b.matchday);
     const byId = id => SNAPS.find(s => s.id === id) || null;
-    CUR = byId(await kv('latest')) || SNAPS[SNAPS.length - 1] || null;
-    BASE = byId(await kv('baseline'));
+    CUR = byId(await kv('latest:' + wid)) || SNAPS[SNAPS.length - 1] || null;
+    BASE = byId(await kv('baseline:' + wid));
     curN = CUR ? OSMScore.normalize(CUR, ST) : null;
     baseN = BASE ? OSMScore.normalize(BASE, ST) : null;
     diff = curN && baseN && CUR.id !== BASE.id ? OSMScore.computeDiff(baseN, curN) : null;
     tour = OSMScore.tournament(MDS);
   }
-
-  // ---------- Kayıt işleme ----------
   async function processQueue(queue) {
     const ids = [];
-    let added = 0;
+    let added = 0, newWars = 0, lastWarId = null;
     queue.sort((a, b) => a.ts - b.ts);
     for (const item of queue) {
       if (item && item.id) ids.push(item.id);
@@ -66,27 +93,62 @@
         raw[key] = stored.tabs[key].raw || '';
         delete stored.tabs[key].raw;
       });
+      // Savaş kimliği: OSM lig adı/URL'si + menajer kümesi. Eşleşme yoksa yeni savaş kaydı açılır.
+      const nn = OSMScore.normalize(stored, ST);
+      let war = null;
+      if (nn.tabOk.league) {
+        const fp = OSMWars.fingerprint(nn, stored);
+        war = OSMWars.findWar(WARS, fp);
+        if (!war) {
+          war = OSMWars.createWar(fp, nn, stored, {});
+          WARS.push(war);
+          newWars++;
+          await OSMDB.log('INFO', 'WAR_CREATED', 'Yeni savaş: ' + (war.league || 'UNKNOWN LEAGUE') + ' · ' + war.id);
+        }
+        OSMWars.refreshWar(war, nn, stored);
+      } else if (WAR) {
+        war = WAR;
+        await OSMDB.log('WARN', 'WAR_UNIDENTIFIED', 'Lig tablosu okunamadı; kayıt seçili savaşa bağlandı: ' + WAR.id);
+      }
+      stored.warId = war ? war.id : null;
       await OSMDB.put('snapshots', stored);
       await OSMDB.put('kv', { key: 'lastRaw', value: raw });
-      await OSMDB.put('kv', { key: 'latest', value: stored.id });
+      if (war) { await OSMDB.put('kv', { key: 'latest:' + war.id, value: stored.id }); lastWarId = war.id; }
       added++;
       for (const key of Object.keys(stored.tabs || {})) {
         if (!stored.tabs[key].ok) await OSMDB.log('WARN', 'TAB_' + key.toUpperCase(), stored.tabs[key].error || 'okunamadı');
       }
-      if (!(await kv('baseline')) && stored.tabs.league && stored.tabs.league.ok) {
-        await OSMDB.put('kv', { key: 'baseline', value: stored.id });
+      if (war && !(await kv('baseline:' + war.id)) && stored.tabs.league && stored.tabs.league.ok) {
+        await OSMDB.put('kv', { key: 'baseline:' + war.id, value: stored.id });
         await OSMDB.log('INFO', 'BASELINE_SET', 'İlk kayıt başlangıç noktası yapıldı; skor üretilmedi.');
       }
     }
+    await OSMWars.saveWars(WARS);
+    if (lastWarId && (!WAR || WAR.id !== lastWarId)) {           // yeni veri hangi savaşa aitse ona geç
+      WAR = WARS.find(w => w.id === lastWarId);
+      await OSMWars.setCurrentId(WAR.id);
+      await loadST();
+      OSMSettings.toForm(ST);
+    }
     await load();
-    if (ST.autoCommit && diff && diff.valid && !diff.unchanged && !diff.warnings.length) await commit();
-    return { ids, added };
+    if (ST.autoCommit && diff && diff.valid && !diff.unchanged && !diff.warnings.length) await commit(true);
+    return { ids, added, newWars, war: WAR };
   }
 
-  async function commit() {
+  async function commit(auto) {
+    if (!WAR) throw new Error('Seçili savaş yok');
     if (!diff || !diff.valid || diff.unchanged) throw new Error('Onaylanabilir geçerli fark yok' + (diff && diff.reasons.length ? ': ' + diff.reasons.join('; ') : ''));
     let number = ST.matchday;
     if (MDS.some(match => match.matchday === number)) number = Math.max.apply(null, MDS.map(match => match.matchday)) + 1;
+    if (!auto) {
+      // Maç günü numarası ASLA tarihten/güncelleme zamanından türetilmez; kullanıcı onaylar.
+      const note = diff.warnings.length ? '\n\nUYARI: ' + diff.warnings.join(' | ') + '\n(Birden fazla maç günü birleşmiş olabilir. Emin değilseniz iptal edin.)' : '';
+      const answer = prompt('Bu fark OSM sıralamasına göre kaçıncı maç günü? Tracker\'ı geç açmak numarayı değiştirmez.' + note, String(number));
+      if (answer === null) return false;
+      number = parseInt(answer, 10);
+      if (!Number.isInteger(number) || number < 1) throw new Error('Geçersiz maç günü numarası');
+      if (MDS.some(match => match.matchday === number)) throw new Error('Maç günü ' + number + ' bu savaşta zaten kayıtlı (çift kayıt engellendi)');
+    }
     const squad = OSMScore.agg(curN.squad, 'value');
     const goals = OSMScore.agg(curN.goals, 'goals');
     const baseGoals = OSMScore.agg(baseN.goals, 'goals');
@@ -101,23 +163,24 @@
       return Object.assign({}, r, { gf: dl(a, b, 'scored'), ga: dl(a, b, 'conceded'), yc: dl(a, b, 'yellow'), rc: dl(a, b, 'red'), squad: q && q.value != null ? q.value : null });
     });
     const record = {
-      matchday: number, ts: Date.now(), baselineId: BASE.id, snapshotId: CUR.id,
+      warId: WAR.id, k: WAR.id + ':' + number, matchday: number, ts: Date.now(), baselineId: BASE.id, snapshotId: CUR.id,
       red: diff.red, blue: diff.blue, rows: rowsFull,
       squad: { RED: squad.RED.sum, BLUE: squad.BLUE.sum },
       goals: { RED: curN.goals.length ? goals.RED.sum : null, BLUE: curN.goals.length ? goals.BLUE.sum : null },
       goalDelta: hasGoals ? { RED: goals.RED.sum - baseGoals.RED.sum, BLUE: goals.BLUE.sum - baseGoals.BLUE.sum } : null
     };
-    await OSMDB.put('matchdays', record);
-    await OSMDB.put('kv', { key: 'baseline', value: CUR.id });
+    await OSMDB.put('md', record);
+    await OSMDB.put('kv', { key: 'baseline:' + WAR.id, value: CUR.id });
     ST.matchday = number + 1;
-    await OSMSettings.save(ST);
+    await saveST();
     await OSMDB.log('INFO', 'MATCHDAY_COMMIT', 'MD' + number + ': RED ' + record.red + ' - ' + record.blue + ' BLUE');
     await refresh();
+    return true;
   }
 
   // ---------- Sheets ----------
   async function buildModel() {
-    return { now: Date.now(), st: ST, curN, baseN, diff, mds: MDS, tour, logs: await OSMDB.all('logs'), snaps: SNAPS, startTs: SNAPS.length ? SNAPS[0].ts : null, names: OSMScore.teamNames(curN, ST) };
+    return { war: WAR, now: Date.now(), st: ST, curN, baseN, diff, mds: MDS, tour, logs: await OSMDB.all('logs'), snaps: SNAPS, startTs: SNAPS.length ? SNAPS[0].ts : null, names: OSMScore.teamNames(curN, ST) };
   }
   async function pushSheets(interactive) {
     if (!ST.spreadsheetId) throw new Error('Google Sheets ID ayarlı değil');
@@ -125,9 +188,11 @@
       if (!interactive) throw new Error('Google bağlantısı gerekli (token yok / süresi dolmuş)');
       await OSMSheets.requestToken(ST.clientId);
     }
-    if (!curN) throw new Error('Önce veri toplanmalı');
-    const result = await OSMSheets.pushBattle(ST.spreadsheetId, await buildModel());
-    await OSMDB.log('INFO', 'SHEETS_PUSH', '"' + result.title + '" sayfası ' + (result.created ? 'oluşturuldu' : 'güncellendi') + ' (' + result.matchdays + ' maç günü)');
+    if (!WAR || !curN) throw new Error('Önce veri toplanmalı (seçili savaş yok)');
+    const result = await OSMSheets.pushWar(ST.spreadsheetId, { war: WAR, model: await buildModel(), cfg: { minMatches: Number(ST.minMatches) >= 0 ? Number(ST.minMatches) : 3, countLive: !!ST.countLive } });
+    WAR.sheetId = result.sheetId; WAR.sheetTitle = result.title;
+    await OSMWars.saveWars(WARS);
+    await OSMDB.log('INFO', 'SHEETS_PUSH', '"' + result.title + '" sayfası ' + (result.created ? 'oluşturuldu' : 'güncellendi') + ' (' + result.matchdays + ' maç günü) · ' + result.wars + ' savaş GLOBAL STATS\'ta');
   }
 
   // ---------- Userscript köprüsü ----------
@@ -230,6 +295,7 @@
     const squad = curN && OSMScore.agg(curN.squad, 'value');
     const goals = curN && OSMScore.agg(curN.goals, 'goals');
     const info = curN && curN.leagueInfo;
+    if ($('warbar')) $('warbar').textContent = WAR ? 'Seçili savaş: ' + (WAR.league || 'UNKNOWN LEAGUE') + ' · ' + WAR.redName + ' vs ' + WAR.blueName + ' · ' + (ST_TR[WAR.status] || WAR.status) : 'Seçili savaş yok';
     $('leagueName').textContent = info && info.name
       ? 'Lig: ' + info.name + (info.type ? ' · ' + info.type : '') + (info.season ? ' · Sezon ' + info.season : '') + (info.moderator ? ' · Moderatör: ' + info.moderator : '')
       : 'Lig: UNKNOWN (yeni toplamada okunur)';
@@ -305,9 +371,93 @@
     return rows.map(row => row.map(csvCell).join(',')).join('\n');
   }
 
+
+  // ---------- Savaş Yöneticisi (MY WARS) ----------
+  const ST_TR = { LIVE: 'CANLI', COMPLETED: 'TAMAMLANDI', ARCHIVED: 'ARŞİV' };
+  function renderWars() {
+    const live = WARS.filter(w => !w.deleted), trash = WARS.filter(w => w.deleted);
+    const mdN = id => ALLMD.filter(m => m.warId === id).length;
+    $('wars').innerHTML = live.length ? live.map(w =>
+      '<div class="war' + (WAR && WAR.id === w.id ? ' sel' : '') + '"><b>' + esc(w.league || 'UNKNOWN LEAGUE') + '</b><br>' +
+      '<span class="tagRED">' + esc(w.redName) + '</span> vs <span class="tagBLUE">' + esc(w.blueName) + '</span>' +
+      '<div class="small">' + esc(w.id) + ' · ' + esc(ST_TR[w.status] || w.status) + ' · ' + mdN(w.id) + ' maç günü · sayfa: ' + esc(w.sheetTitle || 'henüz yok') + (WAR && WAR.id === w.id ? ' · SEÇİLİ' : '') + '</div>' +
+      '<div class="btns"><button data-act="open" data-id="' + esc(w.id) + '">AÇ</button><button data-act="update" data-id="' + esc(w.id) + '">GÜNCELLE</button>' +
+      '<button data-act="archive" data-id="' + esc(w.id) + '">' + (w.status === 'ARCHIVED' ? 'AKTİF ET' : 'ARŞİVLE') + '</button><button data-act="delete" data-id="' + esc(w.id) + '">SİL</button></div></div>'
+    ).join('') : 'Henüz savaş yok. OSM lig sayfasından veri toplayınca savaş otomatik oluşur.';
+    $('trash').innerHTML = trash.length ? trash.map(w =>
+      '<div class="war"><b>' + esc(w.league || 'UNKNOWN LEAGUE') + '</b> · ' + esc(w.redName) + ' vs ' + esc(w.blueName) + '<div class="small">silindi: ' + esc(fmt(w.deleted)) + '</div>' +
+      '<div class="btns"><button data-act="restore" data-id="' + esc(w.id) + '">GERİ AL</button><button data-act="purge" data-id="' + esc(w.id) + '">KALICI SİL</button></div></div>'
+    ).join('') : 'Çöp kutusu boş.';
+  }
+  function renderWarMeta() {
+    if (!WAR || !curN) { $('warmeta').textContent = 'Seçili savaşta veri yok.'; return; }
+    const K = OSMScore.K, sq = new Map(curN.squad.map(x => [K(x.manager), x]));
+    const rows = curN.league.filter(r => r.team !== 'UNKNOWN').map(r => {
+      const key = K(r.manager), m = WAR.managers[key] || {}, cur = sq.get(key);
+      const g = '<select data-g="' + esc(key) + '"><option value="">—</option>' + OSMWars.GLEVELS.map(l => '<option' + (m.g === l ? ' selected' : '') + '>' + l + '</option>').join('') + '</select>';
+      const orig = m.start != null ? (Math.round(m.start / 1e5) / 10) + 'M' : '';
+      const inp = '<input data-s="' + esc(key) + '" data-orig="' + esc(orig) + '" value="' + esc(orig) + '" placeholder="UNKNOWN" size="7">';
+      return [r.manager, r.team, g, inp, cur && cur.value != null ? mil(cur.value) : 'UNKNOWN'];
+    });
+    $('warmeta').innerHTML = '<table><tr><th>Menajer</th><th>Takım</th><th>G</th><th>Başlangıç</th><th>Şimdi</th></tr>' +
+      rows.map(x => '<tr><td>' + esc(x[0]) + '</td><td class="' + esc(x[1]) + '">' + esc(x[1]) + '</td><td>' + x[2] + '</td><td>' + x[3] + '</td><td>' + esc(x[4]) + '</td></tr>').join('') + '</table>' +
+      '<div class="small">Başlangıç değerleri her savaş için ayrıdır ve güncellemelerde ASLA ezilmez. Girilmemiş = UNKNOWN. Örnek giriş: 115 veya 90,2M.</div>';
+  }
+  async function backupBeforeDelete(tag) {
+    download('osm5v5-yedek-' + tag + '-' + Date.now() + '.json', JSON.stringify(await OSMDB.exportAll()), 'application/json');
+  }
+  async function warAction(action, id) {
+    const w = WARS.find(x => x.id === id);
+    if (!w) throw new Error('Savaş bulunamadı');
+    if (action === 'open') { await selectWar(id); showTab('panel'); return; }
+    if (action === 'update') {
+      await selectWar(id);
+      await pushSheets(true);
+      toast('“' + (WAR.sheetTitle || WAR.league) + '” sayfası ve GLOBAL STATS güncellendi');
+      renderWars();
+      return;
+    }
+    if (action === 'archive') {
+      w.status = w.status === 'ARCHIVED' ? 'LIVE' : 'ARCHIVED';
+      await OSMWars.saveWars(WARS);
+      if (WAR && WAR.id === w.id) { await loadST(); OSMSettings.toForm(ST); }
+      toast(w.status === 'ARCHIVED' ? 'Arşivlendi: geçmiş istatistikler GLOBAL STATS\'ta kalır, aktif sayılmaz. Sheets’e “GÜNCELLE” ile yansıtın.' : 'Aktif edildi');
+      renderWars();
+      return;
+    }
+    if (action === 'delete') {
+      if (!confirm('“' + (w.league || w.id) + '” savaşı Tracker’dan silinsin mi?\n(Çöp kutusuna taşınır; GERİ AL ile kurtarılabilir. Diğer savaşlar etkilenmez.)')) return;
+      const withSheets = ST.spreadsheetId && confirm('Bu savaşın Google Sheets sayfası da silinsin mi?\nTamam = Tracker + Google Sheets\nİptal = yalnızca Tracker');
+      await backupBeforeDelete('silme-oncesi');
+      if (withSheets) {
+        if (!OSMSheets.hasToken()) await OSMSheets.requestToken(ST.clientId);
+        const r = await OSMSheets.deleteWarSheet(ST.spreadsheetId, w.id, { minMatches: Number(ST.minMatches) >= 0 ? Number(ST.minMatches) : 3, countLive: !!ST.countLive });
+        await OSMDB.log('INFO', 'WAR_SHEET_DELETED', w.id + ' · kalan savaş: ' + r.wars);
+        w.sheetId = null; w.sheetTitle = '';
+      }
+      w.deleted = Date.now();
+      await OSMWars.saveWars(WARS);
+      await OSMDB.log('INFO', 'WAR_DELETED', w.id + (withSheets ? ' (Tracker + Sheets)' : ' (yalnızca Tracker)'));
+      if (WAR && WAR.id === w.id) { await loadWars(); await loadST(); OSMSettings.toForm(ST); await refresh(); }
+      toast('Silindi' + (withSheets ? ' (Tracker + Google Sheets)' : ' (yalnızca Tracker)') + ' · yedek indirildi');
+      renderWars();
+      return;
+    }
+    if (action === 'restore') { w.deleted = null; await OSMWars.saveWars(WARS); toast('Geri alındı'); renderWars(); return; }
+    if (action === 'purge') {
+      if (!confirm('KALICI silme: bu savaşın tüm kayıtları Tracker’dan silinir (geri alınamaz). Devam?')) return;
+      await backupBeforeDelete('kalici-silme-oncesi');
+      await OSMWars.purgeWar(id);
+      WARS = await OSMWars.listWars();
+      toast('Kalıcı olarak silindi (yedek indirildi)');
+      renderWars();
+    }
+  }
+
   // ---------- Olaylar ----------
   function showTab(name) {
-    ['panel', 'settings', 'history', 'logs'].forEach(tab => { $('tab-' + tab).hidden = tab !== name; });
+    ['panel', 'wars', 'settings', 'history', 'logs'].forEach(tab => { $('tab-' + tab).hidden = tab !== name; });
+    if (name === 'wars') { renderWars(); renderWarMeta(); }
     document.querySelectorAll('nav button').forEach(button => button.classList.toggle('active', button.dataset.tab === name));
   }
   const act = (id, fn) => $(id).addEventListener('click', async () => {
@@ -317,17 +467,48 @@
   async function saveForm() {
     ST = OSMSettings.fromForm(ST);
     ST.spreadsheetId = OSMSettings.cleanSheetId(ST.spreadsheetId);
-    await OSMSettings.save(ST);
+    await saveST();
     OSMSettings.toForm(ST);
     await refresh();
   }
 
   async function init() {
     await OSMDB.open();
-    ST = await OSMSettings.load();
+    await OSMWars.migrate(await OSMSettings.load());      // eski tek savaşlı veriyi güvenle savaş kaydına taşır (yedek depo silinmez)
+    await loadWars();
+    await loadST();
     OSMSettings.toForm(ST);
     document.querySelectorAll('nav button').forEach(button => button.addEventListener('click', () => showTab(button.dataset.tab)));
 
+    $('wars').addEventListener('click', async event => {
+      const button = event.target && event.target.closest ? event.target.closest('button[data-act]') : null;
+      if (!button) return;
+      try { await warAction(button.dataset.act, button.dataset.id); } catch (error) { await fail('WAR_' + String(button.dataset.act).toUpperCase(), error); }
+    });
+    $('trash').addEventListener('click', async event => {
+      const button = event.target && event.target.closest ? event.target.closest('button[data-act]') : null;
+      if (!button) return;
+      try { await warAction(button.dataset.act, button.dataset.id); } catch (error) { await fail('WAR_' + String(button.dataset.act).toUpperCase(), error); }
+    });
+    act('b-savemeta', async () => {
+      if (!WAR) throw new Error('Seçili savaş yok');
+      document.querySelectorAll('#warmeta [data-g]').forEach(el => OSMWars.setG(WAR, el.dataset.g, el.value || null));
+      let changed = 0;
+      document.querySelectorAll('#warmeta [data-s]').forEach(el => {
+        if (el.value.trim() !== (el.dataset.orig || '')) { OSMWars.setStart(WAR, el.dataset.s, el.value); changed++; }   // yalnızca elle değiştirilenler
+      });
+      await OSMWars.saveWars(WARS);
+      renderWarMeta();
+      toast('G-seviyeleri kaydedildi · ' + changed + ' başlangıç değeri güncellendi');
+    });
+    act('b-confirmstart', async () => {
+      if (!WAR || !curN) throw new Error('Seçili savaşta veri yok');
+      if (!confirm('Şimdiki kadro değerleri bu savaşın GERÇEK başlangıç değeri mi?\nYalnızca boş (UNKNOWN) olanlar doldurulur; girilmiş değerler ezilmez. Emin değilseniz iptal edin.')) return;
+      const n = OSMWars.confirmStartFromCurrent(WAR, curN, false);
+      await OSMWars.saveWars(WARS);
+      renderWarMeta();
+      toast(n + ' menajerin başlangıç değeri onaylandı');
+    });
     act('b-fetch', async () => { askQueue(true); });
     act('b-commit', async () => { await commit(); toast('Maç günü kaydedildi'); });
     act('b-push', async () => { await pushSheets(true); toast('Google Sheets güncellendi'); });
@@ -336,7 +517,7 @@
       if (!curN) throw new Error('Önce veri toplanmalı');
       ST.redManagers = curN.league.filter(row => row.team === 'RED').map(row => row.manager);
       ST.blueManagers = curN.league.filter(row => row.team === 'BLUE').map(row => row.manager);
-      await OSMSettings.save(ST);
+      await saveST();
       OSMSettings.toForm(ST);
       await refresh();
       toast('RED ' + ST.redManagers.length + ' / BLUE ' + ST.blueManagers.length + ' menajer. Listeyi kontrol edin.');
@@ -359,7 +540,7 @@
     act('b-baseline', async () => {
       if (!CUR) throw new Error('Kayıt yok');
       if (!confirm('Başlangıç noktası şimdiki kayıt olarak değiştirilsin? Bekleyen fark sıfırlanır.')) return;
-      await OSMDB.put('kv', { key: 'baseline', value: CUR.id });
+      await OSMDB.put('kv', { key: 'baseline:' + WAR.id, value: CUR.id });
       await OSMDB.log('INFO', 'BASELINE_RESET', CUR.id);
       await refresh();
     });
@@ -369,8 +550,12 @@
       try {
         const file = event.target.files[0];
         if (!file) return;
-        const count = await OSMDB.importAll(JSON.parse(await file.text()));
-        ST = await OSMSettings.load();
+        const data = JSON.parse(await file.text());
+        const count = await OSMDB.importAll(data);
+        if (!(data.kv || []).some(x => x.key === 'wars')) await OSMDB.del('kv', 'migratedV3');   // eski (tek savaşlı) yedek: yeniden taşı
+        await OSMWars.migrate(await OSMSettings.load());
+        await loadWars();
+        await loadST();
         OSMSettings.toForm(ST);
         await refresh();
         toast(count + ' kayıt geri yüklendi');
