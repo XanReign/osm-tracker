@@ -7,9 +7,7 @@
     spreadsheetId: '',
     redManagers: [],
     blueManagers: [],
-    matchday: 1,
     autoSync: true,
-    autoCommit: false,
     minMatches: 3,
     countLive: false,
     redName: '',
@@ -32,9 +30,7 @@
     $('s-sheetId').value = st.spreadsheetId;
     $('s-red').value = st.redManagers.join('\n');
     $('s-blue').value = st.blueManagers.join('\n');
-    $('s-matchday').value = st.matchday;
     $('s-autoSync').checked = !!st.autoSync;
-    $('s-autoCommit').checked = !!st.autoCommit;
     $('s-minMatches').value = st.minMatches == null ? 3 : st.minMatches;
     $('s-countLive').checked = !!st.countLive;
     $('s-redName').value = st.redName || '';
@@ -44,16 +40,13 @@
 
   function fromForm(st) {
     const $ = id => document.getElementById(id);
-    const n = parseInt($('s-matchday').value, 10);
     return Object.assign({}, st, {
       leagueUrl: $('s-leagueUrl').value.trim(),
       clientId: $('s-clientId').value.trim(),
       spreadsheetId: $('s-sheetId').value.trim(),
       redManagers: lines($('s-red').value),
       blueManagers: lines($('s-blue').value),
-      matchday: isNaN(n) || n < 1 ? 1 : n,
       autoSync: $('s-autoSync').checked,
-      autoCommit: $('s-autoCommit').checked,
       minMatches: Math.max(0, parseInt($('s-minMatches').value, 10) || 0),
       countLive: $('s-countLive').checked,
       redName: $('s-redName').value.trim(),

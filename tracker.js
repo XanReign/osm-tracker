@@ -7,7 +7,7 @@
   const val = v => (v == null ? 'UNKNOWN' : v);
   const mil = v => (v == null ? 'UNKNOWN' : Math.round(v / 1e5) / 10 + 'M');
 
-  let ST, WARS = [], WAR = null, ALLMD = [], SNAPS = [], MDS = [], CUR = null, BASE = null, curN = null, baseN = null, diff = null, tour = null;
+  let ST, WARS = [], WAR = null, ALLM = [], SNAPS = [], MATCHES = [], CUR = null, curN = null;
   let busy = false, bridgeSeen = false, appReady = false, requestSeq = 0;
   const pendingRequests = new Map();
 
@@ -57,20 +57,18 @@
 
   async function load() {
     const wid = WAR ? WAR.id : null;
-    SNAPS = (await OSMDB.all('snapshots')).filter(s => s.warId === wid).sort((a, b) => a.ts - b.ts);
-    ALLMD = await OSMDB.all('md');
-    MDS = ALLMD.filter(m => m.warId === wid).sort((a, b) => a.matchday - b.matchday);
-    const byId = id => SNAPS.find(s => s.id === id) || null;
+    SNAPS = (await OSMDB.all('snapshots')).filter(x => x.warId === wid).sort((a, b) => a.ts - b.ts);
+    ALLM = await OSMDB.all('matches');
+    MATCHES = ALLM.filter(x => x.warId === wid && x.status !== 'DISMISSED').sort((a, b) => b.ts - a.ts);
+    const byId = id => SNAPS.find(x => x.id === id) || null;
     CUR = byId(await kv('latest:' + wid)) || SNAPS[SNAPS.length - 1] || null;
-    BASE = byId(await kv('baseline:' + wid));
     curN = CUR ? OSMScore.normalize(CUR, ST) : null;
-    baseN = BASE ? OSMScore.normalize(BASE, ST) : null;
-    diff = curN && baseN && CUR.id !== BASE.id ? OSMScore.computeDiff(baseN, curN) : null;
-    tour = OSMScore.tournament(MDS);
   }
+
   async function processQueue(queue) {
     const ids = [];
     let added = 0, newWars = 0, lastWarId = null;
+    const mc = { added: 0, updated: 0, duplicate: 0, review: 0 };
     queue.sort((a, b) => a.ts - b.ts);
     for (const item of queue) {
       if (item && item.id) ids.push(item.id);
@@ -113,14 +111,32 @@
       stored.warId = war ? war.id : null;
       await OSMDB.put('snapshots', stored);
       await OSMDB.put('kv', { key: 'lastRaw', value: raw });
-      if (war) { await OSMDB.put('kv', { key: 'latest:' + war.id, value: stored.id }); lastWarId = war.id; }
       added++;
       for (const key of Object.keys(stored.tabs || {})) {
         if (!stored.tabs[key].ok) await OSMDB.log('WARN', 'TAB_' + key.toUpperCase(), stored.tabs[key].error || 'okunamadı');
       }
-      if (war && !(await kv('baseline:' + war.id)) && stored.tabs.league && stored.tabs.league.ok) {
-        await OSMDB.put('kv', { key: 'baseline:' + war.id, value: stored.id });
-        await OSMDB.log('INFO', 'BASELINE_SET', 'İlk kayıt başlangıç noktası yapıldı; skor üretilmedi.');
+      if (war) {
+        lastWarId = war.id;
+        // Bireysel maç algılama: aynı savaşın bir önceki görüntüsüyle karşılaştır (gruplama yok)
+        const prevId = await kv('latest:' + war.id);
+        const prevSnap = prevId ? await OSMDB.get('snapshots', prevId) : null;
+        if (prevSnap && prevSnap.ts > stored.ts) {
+          await OSMDB.log('WARN', 'OUT_OF_ORDER', 'Daha eski bir kayıt geldi; maç algılanmadı, son durum değişmedi: ' + stored.id);
+        } else {
+          await OSMDB.put('kv', { key: 'latest:' + war.id, value: stored.id });
+          if (!prevSnap) await OSMDB.log('INFO', 'WAR_FIRST_SNAPSHOT', 'İlk kayıt: başlangıç durumu olarak saklandı, maç üretilmedi (' + (war.league || war.id) + ')');
+          else if (prevSnap.tabs.league && prevSnap.tabs.league.ok && stored.tabs.league && stored.tabs.league.ok) {
+            const pn = OSMScore.normalize(prevSnap, war.cfg), cn = OSMScore.normalize(stored, war.cfg);
+            const found = OSMMatches.detect(pn, cn, { warId: war.id, ts: stored.ts, snapshotId: stored.id, prevSnapshotId: prevSnap.id });
+            for (const m of found.matches.concat(found.review)) {
+              const outcome = await OSMMatches.upsert(m);
+              if (m.status === 'REVIEW' && outcome === 'added') mc.review++;
+              if (outcome === 'added' && m.status === 'OK') mc.added++; else if (outcome === 'updated') mc.updated++; else if (outcome === 'duplicate') mc.duplicate++;
+            }
+            if (found.matches.length || found.review.length) await OSMDB.log('INFO', 'MATCHES_RECORDED', (war.league || war.id) + ': ' + found.matches.length + ' maç, ' + found.review.length + ' inceleme');
+            if (found.ambiguous) await OSMDB.log('WARN', 'NO_GOAL_DATA', found.ambiguous + ' menajerde puan sabit ve gol verisi yok: oynanıp oynanmadığı doğrulanamadı');
+          }
+        }
       }
     }
     await OSMWars.saveWars(WARS);
@@ -131,56 +147,12 @@
       OSMSettings.toForm(ST);
     }
     await load();
-    if (ST.autoCommit && diff && diff.valid && !diff.unchanged && !diff.warnings.length) await commit(true);
-    return { ids, added, newWars, war: WAR };
-  }
-
-  async function commit(auto) {
-    if (!WAR) throw new Error('Seçili savaş yok');
-    if (!diff || !diff.valid || diff.unchanged) throw new Error('Onaylanabilir geçerli fark yok' + (diff && diff.reasons.length ? ': ' + diff.reasons.join('; ') : ''));
-    let number = ST.matchday;
-    if (MDS.some(match => match.matchday === number)) number = Math.max.apply(null, MDS.map(match => match.matchday)) + 1;
-    if (!auto) {
-      // Maç günü numarası ASLA tarihten/güncelleme zamanından türetilmez; kullanıcı onaylar.
-      const note = diff.warnings.length ? '\n\nUYARI: ' + diff.warnings.join(' | ') + '\n(Birden fazla maç günü birleşmiş olabilir. Emin değilseniz iptal edin.)' : '';
-      const answer = prompt('Bu fark OSM sıralamasına göre kaçıncı maç günü? Tracker\'ı geç açmak numarayı değiştirmez.' + note, String(number));
-      if (answer === null) return false;
-      number = parseInt(answer, 10);
-      if (!Number.isInteger(number) || number < 1) throw new Error('Geçersiz maç günü numarası');
-      if (MDS.some(match => match.matchday === number)) throw new Error('Maç günü ' + number + ' bu savaşta zaten kayıtlı (çift kayıt engellendi)');
-    }
-    const squad = OSMScore.agg(curN.squad, 'value');
-    const goals = OSMScore.agg(curN.goals, 'goals');
-    const baseGoals = OSMScore.agg(baseN.goals, 'goals');
-    const hasGoals = curN.goals.length && baseN.goals.length;
-    // Menajer bazlı gol/kart/kadro değişimi (iki kayıt arasındaki fark). Okunamazsa null (0 değil).
-    const K = OSMScore.K;
-    const gm = list => new Map((list || []).map(x => [K(x.manager), x]));
-    const g0 = gm(baseN.goals), g1 = gm(curN.goals), s1 = gm(curN.squad);
-    const dl = (a, b, f) => (a && b && a[f] != null && b[f] != null ? b[f] - a[f] : null);
-    const rowsFull = diff.rows.map(r => {
-      const a = g0.get(K(r.manager)), b = g1.get(K(r.manager)), q = s1.get(K(r.manager));
-      return Object.assign({}, r, { gf: dl(a, b, 'scored'), ga: dl(a, b, 'conceded'), yc: dl(a, b, 'yellow'), rc: dl(a, b, 'red'), squad: q && q.value != null ? q.value : null });
-    });
-    const record = {
-      warId: WAR.id, k: WAR.id + ':' + number, matchday: number, ts: Date.now(), baselineId: BASE.id, snapshotId: CUR.id,
-      red: diff.red, blue: diff.blue, rows: rowsFull,
-      squad: { RED: squad.RED.sum, BLUE: squad.BLUE.sum },
-      goals: { RED: curN.goals.length ? goals.RED.sum : null, BLUE: curN.goals.length ? goals.BLUE.sum : null },
-      goalDelta: hasGoals ? { RED: goals.RED.sum - baseGoals.RED.sum, BLUE: goals.BLUE.sum - baseGoals.BLUE.sum } : null
-    };
-    await OSMDB.put('md', record);
-    await OSMDB.put('kv', { key: 'baseline:' + WAR.id, value: CUR.id });
-    ST.matchday = number + 1;
-    await saveST();
-    await OSMDB.log('INFO', 'MATCHDAY_COMMIT', 'MD' + number + ': RED ' + record.red + ' - ' + record.blue + ' BLUE');
-    await refresh();
-    return true;
+    return { ids, added, newWars, war: WAR, matches: mc };
   }
 
   // ---------- Sheets ----------
   async function buildModel() {
-    return { war: WAR, now: Date.now(), st: ST, curN, baseN, diff, mds: MDS, tour, logs: await OSMDB.all('logs'), snaps: SNAPS, startTs: SNAPS.length ? SNAPS[0].ts : null, names: OSMScore.teamNames(curN, ST) };
+    return { war: WAR, now: Date.now(), st: ST, curN, matches: ALLM.filter(x => x.warId === WAR.id), logs: await OSMDB.all('logs'), snaps: SNAPS, startTs: SNAPS.length ? SNAPS[0].ts : null, names: OSMScore.teamNames(curN, WAR.cfg) };
   }
   async function pushSheets(interactive) {
     if (!ST.spreadsheetId) throw new Error('Google Sheets ID ayarlı değil');
@@ -192,7 +164,7 @@
     const result = await OSMSheets.pushWar(ST.spreadsheetId, { war: WAR, model: await buildModel(), cfg: { minMatches: Number(ST.minMatches) >= 0 ? Number(ST.minMatches) : 3, countLive: !!ST.countLive } });
     WAR.sheetId = result.sheetId; WAR.sheetTitle = result.title;
     await OSMWars.saveWars(WARS);
-    await OSMDB.log('INFO', 'SHEETS_PUSH', '"' + result.title + '" sayfası ' + (result.created ? 'oluşturuldu' : 'güncellendi') + ' (' + result.matchdays + ' maç günü) · ' + result.wars + ' savaş GLOBAL STATS\'ta');
+    await OSMDB.log('INFO', 'SHEETS_PUSH', '"' + result.title + '" sayfası ' + (result.created ? 'oluşturuldu' : 'güncellendi') + ' (' + result.matches + ' maç) · ' + result.wars + ' savaş GLOBAL STATS\'ta');
   }
 
   // ---------- Userscript köprüsü ----------
@@ -238,7 +210,7 @@
       const result = await processQueue(queue);
       post({ type: 'ACK', ids: result.ids, requestId });
       await refresh();
-      toast(result.added + ' yeni kayıt işlendi (' + result.ids.length + ' kuyruk kaydı)');
+      toast(result.added + ' kayıt · ' + result.matches.added + ' yeni maç' + (result.matches.updated ? ' · ' + result.matches.updated + ' güncelleme' : '') + (result.matches.review ? ' · ' + result.matches.review + ' inceleme' : ''));
       if (ST.autoSync && ST.spreadsheetId && OSMSheets.hasToken()) {
         try { await pushSheets(false); toast('Google Sheets güncellendi'); }
         catch (error) { await fail('SHEETS_API', error); }
@@ -284,9 +256,10 @@
     rows.map(row => '<tr>' + row.map((cell, index) => '<td' + (index === teamColumn ? ' class="' + esc(cell) + '"' : '') + '>' + esc(cell) + '</td>').join('') + '</tr>').join('') + '</table>';
 
   function render() {
-    const last = MDS[MDS.length - 1];
+    const okM = MATCHES.filter(x => x.status === 'OK'), nRev = MATCHES.filter(x => x.status === 'REVIEW').length;
+    const wins = t => okM.filter(x => x.team === t && x.result === 'W').length;
     $('status').innerHTML = CUR
-      ? 'Son kayıt: ' + esc(fmt(CUR.ts)) + ' · Başlangıç noktası: ' + esc(BASE ? fmt(BASE.ts) : 'YOK') + ' · Kayıtlı maç günü: ' + MDS.length +
+      ? 'Son kayıt: ' + esc(fmt(CUR.ts)) + ' · Kayıtlı maç: ' + okM.length + (nRev ? ' · <span class="warn">İncelenecek: ' + nRev + '</span>' : '') +
         (curN && curN.warnings.length ? '<br><span class="warn">Uyarı: ' + esc(curN.warnings.slice(0, 3).join(' | ')) + '</span>' : '') +
         '<br>* = bazı değerler UNKNOWN, toplam eksik olabilir.'
       : 'Henüz kayıt yok. OSM lig sayfasında userscript’i çalıştırın, sonra “Userscript’ten veri al”a basın.';
@@ -307,27 +280,18 @@
         '<div class="small">' + (gap === 0 ? 'Berabere' : (gap > 0 ? 'RED' : 'BLUE') + ' ' + Math.abs(gap) + ' puan önde') + ' · toplam lig puanı</div>';
     } else $('score').textContent = '—';
     $('teams').innerHTML = ['RED', 'BLUE'].map(team => {
-      const pending = diff && diff.valid ? diff[team.toLowerCase()] : null;
-      const mdInfo = pending != null ? 'Bekleyen maç günü: +' + pending : (last ? 'Son maç günü: +' + last[team.toLowerCase()] : 'Maç günü: —');
       return '<div class="team ' + team + '"><div class="t">TEAM ' + team + '</div>' +
         '<div class="big">' + esc(star(league && league[team])) + '</div>' +
         '<div class="m">toplam puan</div>' +
-        '<div class="m">' + esc(mdInfo) + '</div>' +
+        '<div class="m">Maç galibiyeti: ' + wins(team) + '</div>' +
         '<div class="m">Kadro: ' + esc(squad && squad[team].n ? mil(squad[team].sum) + (squad[team].unknown ? '*' : '') : 'UNKNOWN') + '</div>' +
         '<div class="m">Gol: ' + esc(star(goals && goals[team])) + '</div>' +
         '<div class="m">Menajer: ' + (league ? league[team].n : 'UNKNOWN') + '</div></div>';
     }).join('');
 
-    if (!BASE) $('preview').textContent = 'Başlangıç noktası yok; skor üretilmedi.';
-    else if (!diff) $('preview').textContent = 'Başlangıç noktasından sonra yeni kayıt yok.';
-    else {
-      let html = diff.valid
-        ? (diff.unchanged ? '<p>Puan değişmedi.</p>' : '<p class="ok"><b>RED ' + diff.red + ' - ' + diff.blue + ' BLUE</b> (geçerli)</p>')
-        : '<p class="bad">Geçersiz: ' + esc(diff.reasons.join('; ')) + '</p>';
-      if (diff.warnings.length) html += '<p class="warn">' + esc(diff.warnings.join(' | ')) + '</p>';
-      html += table(['Menajer', 'Takım', 'Önceki', 'Şimdi', 'Fark'], diff.rows.map(row => [row.manager, row.team, row.prev, row.curr, row.diff]), 1);
-      $('preview').innerHTML = html;
-    }
+    $('recent').innerHTML = okM.length
+      ? table(['Tarih', 'Menajer', 'Takım', 'Sonuç', 'Puan', 'Gol'], okM.slice(0, 10).map(x => [fmt(x.ts), x.manager, x.team, x.result, x.points, (x.gf == null ? '—' : x.gf) + '-' + (x.ga == null ? '—' : x.ga)]), 2)
+      : 'Henüz maç kaydı yok. Bir menajerin puanı/golü iki kayıt arasında değişince maç kendiliğinden kaydedilir.';
 
     $('standings').innerHTML = curN && curN.league.length
       ? table(['#', 'Kulüp', 'Menajer', 'Takım', 'Puan'], curN.league.map(row => [row.rank, row.club, row.manager, row.team, val(row.points)]), 3)
@@ -340,9 +304,17 @@
         (curN.topScorers.length ? '<p class="small">Gol kralları: ' + esc(curN.topScorers.map(row => row.player + ' (' + row.team + ') ' + row.goals).join(' · ')) + '</p>' : '')
       : 'Gol bilgisi okunamadı (UNKNOWN)';
 
-    $('history').innerHTML = MDS.length
-      ? table(['MD', 'Tarih', 'RED', 'BLUE', 'Kadro R', 'Kadro B'], MDS.slice().reverse().map(match => [match.matchday, fmt(match.ts), match.red, match.blue, mil(match.squad.RED), mil(match.squad.BLUE)]))
-      : 'Kayıtlı maç günü yok.';
+    $('history').innerHTML = MATCHES.length
+      ? table(['Tarih', 'Menajer', 'Kulüp', 'Takım', 'Sonuç', 'Puan', 'GF', 'GA', 'SK', 'KK', 'Durum'], MATCHES.map(x => [fmt(x.ts), x.manager, x.club, x.team, x.result || '?', x.points == null ? '—' : x.points, val(x.gf), val(x.ga), val(x.yc), val(x.rc), x.status]), 3)
+      : 'Kayıtlı maç yok.';
+    renderReview();
+  }
+  function renderReview() {
+    const rv = MATCHES.filter(x => x.status === 'REVIEW');
+    $('review').innerHTML = rv.length ? rv.map(x =>
+      '<div class="war"><b>' + esc(x.manager) + '</b> · ' + esc(x.team) + ' · ' + esc(fmt(x.ts)) + '<div class="small">' + esc(x.reason || '') + ' · ' + esc(String(x.points == null ? '—' : x.points)) + ' puan · ' + esc(x.source) + '</div>' +
+      '<div class="btns"><button data-act="dismiss" data-id="' + esc(x.id) + '">YOKSAY</button></div></div>'
+    ).join('') : 'İnceleme bekleyen kayıt yok.';
   }
 
   async function renderLogs() {
@@ -366,21 +338,20 @@
   }
   const csvCell = value => '"' + String(value == null ? '' : value).replace(/"/g, '""') + '"';
   function toCsv() {
-    const rows = [['matchday', 'tarih', 'menajer', 'kulup', 'takim', 'onceki', 'yeni', 'fark']];
-    MDS.forEach(match => match.rows.forEach(row => rows.push([match.matchday, fmt(match.ts), row.manager, row.club, row.team, row.prev, row.curr, row.diff])));
+    const rows = [['tarih', 'menajer', 'kulup', 'takim', 'sonuc', 'puan', 'atilan', 'yenilen', 'sari', 'kirmizi', 'durum', 'not', 'kaynak', 'id']];
+    MATCHES.forEach(x => rows.push([fmt(x.ts), x.manager, x.club, x.team, x.result || '', x.points, x.gf, x.ga, x.yc, x.rc, x.status, x.reason || '', x.source, x.id]));
     return rows.map(row => row.map(csvCell).join(',')).join('\n');
   }
-
 
   // ---------- Savaş Yöneticisi (MY WARS) ----------
   const ST_TR = { LIVE: 'CANLI', COMPLETED: 'TAMAMLANDI', ARCHIVED: 'ARŞİV' };
   function renderWars() {
     const live = WARS.filter(w => !w.deleted), trash = WARS.filter(w => w.deleted);
-    const mdN = id => ALLMD.filter(m => m.warId === id).length;
+    const mdN = id => ALLM.filter(m => m.warId === id && m.status === 'OK').length;
     $('wars').innerHTML = live.length ? live.map(w =>
       '<div class="war' + (WAR && WAR.id === w.id ? ' sel' : '') + '"><b>' + esc(w.league || 'UNKNOWN LEAGUE') + '</b><br>' +
       '<span class="tagRED">' + esc(w.redName) + '</span> vs <span class="tagBLUE">' + esc(w.blueName) + '</span>' +
-      '<div class="small">' + esc(w.id) + ' · ' + esc(ST_TR[w.status] || w.status) + ' · ' + mdN(w.id) + ' maç günü · sayfa: ' + esc(w.sheetTitle || 'henüz yok') + (WAR && WAR.id === w.id ? ' · SEÇİLİ' : '') + '</div>' +
+      '<div class="small">' + esc(w.id) + ' · ' + esc(ST_TR[w.status] || w.status) + ' · ' + mdN(w.id) + ' maç · sayfa: ' + esc(w.sheetTitle || 'henüz yok') + (WAR && WAR.id === w.id ? ' · SEÇİLİ' : '') + '</div>' +
       '<div class="btns"><button data-act="open" data-id="' + esc(w.id) + '">AÇ</button><button data-act="update" data-id="' + esc(w.id) + '">GÜNCELLE</button>' +
       '<button data-act="archive" data-id="' + esc(w.id) + '">' + (w.status === 'ARCHIVED' ? 'AKTİF ET' : 'ARŞİVLE') + '</button><button data-act="delete" data-id="' + esc(w.id) + '">SİL</button></div></div>'
     ).join('') : 'Henüz savaş yok. OSM lig sayfasından veri toplayınca savaş otomatik oluşur.';
@@ -509,8 +480,12 @@
       renderWarMeta();
       toast(n + ' menajerin başlangıç değeri onaylandı');
     });
+    $('review').addEventListener('click', async event => {
+      const button = event.target && event.target.closest ? event.target.closest('button[data-act]') : null;
+      if (!button) return;
+      try { await OSMMatches.dismiss(button.dataset.id); await refresh(); toast('İnceleme kaydı yok sayıldı (istatistiğe girmez)'); } catch (error) { await fail('REVIEW_DISMISS', error); }
+    });
     act('b-fetch', async () => { askQueue(true); });
-    act('b-commit', async () => { await commit(); toast('Maç günü kaydedildi'); });
     act('b-push', async () => { await pushSheets(true); toast('Google Sheets güncellendi'); });
     act('b-save', async () => { await saveForm(); toast('Kaydedildi'); });
     act('b-autofill', async () => {
@@ -537,13 +512,6 @@
       if (!OSMSheets.hasToken()) await OSMSheets.requestToken(ST.clientId);
       toast('Bağlantı OK: ' + await OSMSheets.test(ST.spreadsheetId));
     });
-    act('b-baseline', async () => {
-      if (!CUR) throw new Error('Kayıt yok');
-      if (!confirm('Başlangıç noktası şimdiki kayıt olarak değiştirilsin? Bekleyen fark sıfırlanır.')) return;
-      await OSMDB.put('kv', { key: 'baseline:' + WAR.id, value: CUR.id });
-      await OSMDB.log('INFO', 'BASELINE_RESET', CUR.id);
-      await refresh();
-    });
     act('b-backup', async () => { download('osm5v5-yedek-' + Date.now() + '.json', JSON.stringify(await OSMDB.exportAll()), 'application/json'); });
     act('b-restore', async () => { $('f-restore').click(); });
     $('f-restore').addEventListener('change', async event => {
@@ -561,12 +529,6 @@
         toast(count + ' kayıt geri yüklendi');
       } catch (error) { await fail('RESTORE', error); }
       event.target.value = '';
-    });
-    act('b-xlsx', async () => {
-      if (!curN) throw new Error('Önce veri toplanmalı');
-      const blob = OSMSheets.toXlsx(await buildModel());
-      download('OSM-5v5-' + new Date().toISOString().slice(0, 10) + '.xlsx', blob, blob.type);
-      toast('İndirildi. Google Drive’a yükleyip Sheets ile açın.');
     });
     act('b-csv', async () => { download('osm5v5-maclar.csv', toCsv(), 'text/csv'); });
 

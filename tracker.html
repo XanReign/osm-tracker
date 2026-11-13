@@ -17,7 +17,7 @@
   <button data-tab="panel" class="active">Panel</button>
   <button data-tab="wars">Savaşlar</button>
   <button data-tab="settings">Ayarlar</button>
-  <button data-tab="history">Geçmiş</button>
+  <button data-tab="history">Maçlar</button>
   <button data-tab="logs">Loglar</button>
 </nav>
 
@@ -28,11 +28,9 @@
   <div id="teams" class="teams"></div>
   <div class="btns">
     <button id="b-fetch">Userscript'ten veri al</button>
-    <button id="b-commit">Maç gününü onayla</button>
     <button id="b-push">Sheets'e gönder (savaş sayfası)</button>
-    <button id="b-xlsx">Eski çok sayfalı .xlsx indir</button>
   </div>
-  <h2>Bekleyen fark</h2><div id="preview" class="card"></div>
+  <h2>Son maçlar</h2><div id="recent" class="card"></div>
   <h2>Lig tablosu</h2><div id="standings" class="card"></div>
   <h2>Kadro değeri</h2><div id="squad" class="card"></div>
   <h2>Gol</h2><div id="goals" class="card"></div>
@@ -47,6 +45,8 @@
     <button id="b-savemeta">G ve başlangıç değerlerini kaydet</button>
     <button id="b-confirmstart">Şimdiki değerleri başlangıç olarak ONAYLA</button>
   </div>
+  <h2>İnceleme bekleyen kayıtlar</h2>
+  <div id="review" class="card">—</div>
   <h2>Çöp kutusu (geri alınabilir)</h2>
   <div id="trash" class="card">—</div>
 </section>
@@ -60,18 +60,15 @@
   <label>RED takım adı (boşsa kulüp adlarından otomatik)<input id="s-redName" type="text" placeholder="Team Red"></label>
   <label>BLUE takım adı (boşsa kulüp adlarından otomatik)<input id="s-blueName" type="text" placeholder="Team Blue"></label>
   <label class="row"><input id="s-completed" type="checkbox"> Savaş tamamlandı (sayfada COMPLETED görünür)</label>
-  <label>Sıradaki maç günü numarası<input id="s-matchday" type="number" min="1"></label>
   <label class="row"><input id="s-autoSync" type="checkbox"> Veri gelince Sheets'e otomatik gönder (token geçerliyse)</label>
   <label>GLOBAL STATS: ortalama sıralamalar için asgari izlenen maç sayısı<input id="s-minMatches" type="number" min="0"></label>
   <label class="row"><input id="s-countLive" type="checkbox"> Devam eden (LIVE) savaşlar da ödül saysın</label>
-  <label class="row"><input id="s-autoCommit" type="checkbox"> Geçerli fark gelince maç gününü otomatik onayla</label>
   <div class="btns">
     <button id="b-save">Kaydet</button>
     <button id="b-autofill">Menajerleri lig tablosundan doldur</button>
     <button id="b-google">Google'a bağlan</button>
     <button id="b-create">Yeni Google Sheets oluştur</button>
     <button id="b-test">Sheets bağlantı testi</button>
-    <button id="b-baseline">Başlangıç noktasını şimdiki kayıt yap</button>
   </div>
   <h2>Yedekleme</h2>
   <div class="btns">
@@ -83,7 +80,7 @@
 </section>
 
 <section id="tab-history" hidden>
-  <h2>Maç günleri</h2><div id="history" class="card"></div>
+  <h2>Maç kayıtları</h2><div id="history" class="card"></div>
 </section>
 
 <section id="tab-logs" hidden>
@@ -93,11 +90,12 @@
 </main>
 <div id="toast"></div>
 
-<script src="database.js?v=5"></script>
-<script src="settings.js?v=5"></script>
-<script src="score-engine.js?v=5"></script>
-<script src="wars.js?v=5"></script>
-<script src="google-sheets-api.js?v=5"></script>
-<script src="tracker.js?v=5"></script>
+<script src="database.js?v=6"></script>
+<script src="settings.js?v=6"></script>
+<script src="score-engine.js?v=6"></script>
+<script src="wars.js?v=6"></script>
+<script src="matches.js?v=6"></script>
+<script src="google-sheets-api.js?v=6"></script>
+<script src="tracker.js?v=6"></script>
 </body>
 </html>

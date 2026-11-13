@@ -1,8 +1,8 @@
 /* database.js — IndexedDB katmanı (tracker sayfası kökeni) */
 (function (g) {
   'use strict';
-  const DB_NAME = 'osm5v5', VER = 2;
-  const STORES = ['snapshots', 'matchdays', 'md', 'kv', 'logs'];
+  const DB_NAME = 'osm5v5', VER = 3;
+  const STORES = ['snapshots', 'matchdays', 'md', 'matches', 'kv', 'logs'];   // 'matchdays' ve 'md' yalnızca eski verinin göçü için okunur
   let _db = null;
 
   function open() {
@@ -17,6 +17,7 @@
         if (!has('kv')) d.createObjectStore('kv', { keyPath: 'key' });
         if (!has('logs')) d.createObjectStore('logs', { keyPath: 'id', autoIncrement: true });
         if (!has('md')) d.createObjectStore('md', { keyPath: 'k' });
+        if (!has('matches')) d.createObjectStore('matches', { keyPath: 'id' });   // sürüm 3: bireysel maç kayıtları
       };
       r.onsuccess = () => { _db = r.result; res(_db); };
       r.onerror = () => rej(r.error);

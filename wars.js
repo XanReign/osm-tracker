@@ -3,7 +3,7 @@
   'use strict';
   const K = s => OSMScore.K(s);
   const GLEVELS = ['G1', 'G3', 'G5', 'G7', 'G9'];
-  const CFG_KEYS = ['redManagers', 'blueManagers', 'redName', 'blueName', 'matchday'];
+  const CFG_KEYS = ['redManagers', 'blueManagers', 'redName', 'blueName'];
 
   // ---------- Kayıt defteri (IndexedDB 'kv') ----------
   async function listWars() { const r = await OSMDB.get('kv', 'wars'); return r ? r.value : []; }
@@ -46,7 +46,7 @@
       id: newId(), league: n.leagueInfo && n.leagueInfo.name ? n.leagueInfo.name : '', redName: names.RED, blueName: names.BLUE,
       status: 'LIVE', deleted: null, createdAt: Date.now(), startTs: snap ? snap.ts : Date.now(), osmUrl: snap && snap.url || '',
       fp, sheetId: null, sheetTitle: '',
-      cfg: { redManagers: [], blueManagers: [], redName: '', blueName: '', matchday: 1 },
+      cfg: { redManagers: [], blueManagers: [], redName: '', blueName: '' },
       managers: {}
     };
   }
@@ -96,36 +96,31 @@
   }
 
   // ---------- Savaşın menajer ve savaş satırları (Sheets'e gizli veri olarak yazılır) ----------
-  function managerRows(war, n, mds) {
+  function managerRows(war, n, matches) {
     const goals = new Map(n.goals.map(x => [K(x.manager), x])), squad = new Map(n.squad.map(x => [K(x.manager), x]));
+    const st = OSMMatches.summarize(matches);
     return n.league.filter(r => r.team !== 'UNKNOWN').map(r => {
       const key = K(r.manager), meta = war.managers[key] || {}, gl = goals.get(key) || null, sq = squad.get(key) || null;
       const cur = sq && sq.value != null ? sq.value : null, start = meta.start != null ? meta.start : null;
       const growth = start != null && start > 0 && cur != null ? (cur - start) / start * 100 : null;
-      let m = 0, w = 0, d = 0, l = 0, pts = 0, gm = 0, tgf = 0, tga = 0;
-      mds.forEach(x => {
-        const y = x.rows.find(z => K(z.manager) === key);
-        if (!y || [0, 1, 3].indexOf(y.diff) === -1) return;   // çoklu maç / belirsiz fark: maç sayılmaz
-        m++; pts += y.diff; if (y.diff === 3) w++; else if (y.diff === 1) d++; else l++;
-        if (y.gf != null && y.ga != null) { gm++; tgf += y.gf; tga += y.ga; }
-      });
+      const a = st.get(key) || { played: 0, w: 0, d: 0, l: 0, pts: 0, gm: 0, tgf: 0, tga: 0 };
       return {
         warId: war.id, league: war.league, status: war.status, key, name: r.manager, club: r.club, team: r.team, g: meta.g || null,
         start, current: cur, growth, gf: gl ? gl.scored : null, ga: gl ? gl.conceded : null, yc: gl ? gl.yellow : null, rc: gl ? gl.red : null,
-        pts: r.points, warPts: pts, matches: m, wins: w, draws: d, losses: l, gm, tgf, tga
+        pts: r.points, warPts: a.pts, matches: a.played, wins: a.w, draws: a.d, losses: a.l, gm: a.gm, tgf: a.tgf, tga: a.tga
       };
     });
   }
-  function warRow(war, n, mds, rows, sheetTitle) {
+  function warRow(war, n, matches, rows, sheetTitle) {
     const sum = (t, f) => { const rs = rows.filter(r => r.team === t); return rs.length && rs.every(r => r[f] != null) ? rs.reduce((a, r) => a + r[f], 0) : null; };
-    const tour = OSMScore.tournament(mds);
+    const tot = (t, f) => rows.filter(r => r.team === t).reduce((a, r) => a + (r[f] || 0), 0);
     return {
       warId: war.id, league: war.league, red: war.redName, blue: war.blueName, status: war.status, sheet: sheetTitle || war.sheetTitle || '', sheetId: war.sheetId,
-      startTs: war.startTs, updated: Date.now(), matchdays: mds.length,
-      redPts: sum('RED', 'pts'), bluePts: sum('BLUE', 'pts'), redWar: tour.redPts, blueWar: tour.bluePts,
+      startTs: war.startTs, updated: Date.now(), matches: matches.filter(x => x.status === 'OK').length,
+      redPts: sum('RED', 'pts'), bluePts: sum('BLUE', 'pts'), redWarPts: tot('RED', 'warPts'), blueWarPts: tot('BLUE', 'warPts'),
       redGoals: sum('RED', 'gf'), blueGoals: sum('BLUE', 'gf'), redConc: sum('RED', 'ga'), blueConc: sum('BLUE', 'ga'),
       yc: rows.every(r => r.yc != null) ? rows.reduce((a, r) => a + r.yc, 0) : null, rc: rows.every(r => r.rc != null) ? rows.reduce((a, r) => a + r.rc, 0) : null,
-      redWins: tour.redWins, blueWins: tour.blueWins, draws: tour.draws, managers: rows.length
+      redWins: tot('RED', 'wins'), blueWins: tot('BLUE', 'wins'), draws: rows.reduce((a, r) => a + (r.draws || 0), 0), managers: rows.length
     };
   }
 
@@ -210,7 +205,7 @@
   }
 
   // ---------- Eski (tek savaşlı) verinin güvenli taşınması ----------
-  async function migrate(st) {
+  async function migrateV3(st) {  // eski tek savaşlı kayıtlar -> savaşlar (yedek depolar silinmez)
     if (await OSMDB.get('kv', 'migratedV3')) return { migrated: false };
     const snaps = (await OSMDB.all('snapshots')).sort((a, b) => a.ts - b.ts);
     const oldMd = await OSMDB.all('matchdays');
@@ -235,11 +230,8 @@
       if (!mine.length) continue;
       if (w.id === mdWar) {
         for (const m of oldMd) await OSMDB.put('md', Object.assign({}, m, { warId: w.id, k: w.id + ':' + m.matchday }));
-        if (bl) await OSMDB.put('kv', { key: 'baseline:' + w.id, value: bl.value });
-        w.cfg = { redManagers: st.redManagers || [], blueManagers: st.blueManagers || [], redName: st.redName || '', blueName: st.blueName || '', matchday: st.matchday || 1 };
+        w.cfg = { redManagers: st.redManagers || [], blueManagers: st.blueManagers || [], redName: st.redName || '', blueName: st.blueName || '' };
         if (st.battleCompleted) w.status = 'COMPLETED';
-      } else {
-        await OSMDB.put('kv', { key: 'baseline:' + w.id, value: mine[0].id });   // kural: ilk kayıt başlangıç noktası
       }
       await OSMDB.put('kv', { key: 'latest:' + w.id, value: mine[mine.length - 1].id });
       w.startTs = mine[0].ts;
@@ -250,14 +242,36 @@
     return { migrated: true, wars: list.length };
   }
 
+
+  // Eski "maç günü" kayıtlarını bireysel maç kayıtlarına çevirir. Hiçbir veri silinmez; doğrulanamayanlar REVIEW olur. Tekrar çalıştırmak çift kayıt üretmez.
+  async function migrateMatches() {
+    if (await OSMDB.get('kv', 'migratedV4')) return { migrated: false };
+    let added = 0, review = 0, seen = 0;
+    for (const rec of await OSMDB.all('md')) {
+      if (!rec.warId) continue;
+      for (const m of OSMMatches.fromLegacy(rec, rec.warId)) {
+        seen++;
+        if (!(await OSMDB.get('matches', m.id))) { await OSMDB.put('matches', m); added++; if (m.status === 'REVIEW') review++; }
+      }
+    }
+    await OSMDB.put('kv', { key: 'migratedV4', value: true });
+    return { migrated: true, added, review, seen };
+  }
+  async function migrate(st) {
+    const a = await migrateV3(st);
+    const b = await migrateMatches();
+    return Object.assign({}, a, { matches: b });
+  }
+
   // Soft-delete / geri alma / kalıcı silme (kalıcı silme öncesi yedek önerilir)
   async function purgeWar(id) {
     for (const s of await OSMDB.all('snapshots')) if (s.warId === id) await OSMDB.del('snapshots', s.id);
     for (const m of await OSMDB.all('md')) if (m.warId === id) await OSMDB.del('md', m.k);
-    await OSMDB.del('kv', 'baseline:' + id); await OSMDB.del('kv', 'latest:' + id);
+    for (const m of await OSMDB.all('matches')) if (m.warId === id) await OSMDB.del('matches', m.id);
+    await OSMDB.del('kv', 'latest:' + id);
     await saveWars((await listWars()).filter(w => w.id !== id));
   }
 
   g.OSMWars = { GLEVELS, CFG_KEYS, listWars, saveWars, getCurrentId, setCurrentId, splitSettings, fingerprint, sameWar, findWar, createWar, refreshWar, ensureManagers,
-    setG, parseStart, setStart, confirmStartFromCurrent, managerRows, warRow, computeGlobal, migrate, purgeWar };
+    setG, parseStart, setStart, confirmStartFromCurrent, managerRows, warRow, computeGlobal, migrate, migrateMatches, purgeWar };
 })(typeof window !== 'undefined' ? window : globalThis);
